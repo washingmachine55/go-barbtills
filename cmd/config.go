@@ -37,7 +37,8 @@ func loggerInit() {
 		// ReportTimestamp: true,
 		// TimeFormat: time.Second.String(),
 	})
-	Logger.SetLevel(log.DebugLevel)
+	Logger.SetLevel(log.InfoLevel)
+	Logger.SetOutput(os.Stderr)
 
 	styles := log.DefaultStyles()
 	styles.Levels[log.FatalLevel] = lipgloss.NewStyle().
@@ -51,6 +52,11 @@ func loggerInit() {
 	
 	Logger.SetStyles(styles)
 }
+
+func LoggerSetLevelDebug() {
+	Logger.SetLevel(log.DebugLevel)
+}
+
 
 func init() {
 	RootCmd.AddCommand(configCmd)
