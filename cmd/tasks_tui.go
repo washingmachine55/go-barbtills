@@ -95,6 +95,7 @@ func newTasksInteractiveModel(db *sql.DB) *tasksInteractiveModel {
 	l.DisableQuitKeybindings()
 	l.SetShowStatusBar(false)
 	l.SetShowPagination(true)
+	l.SetShowHelp(false)
 
 	ti := textinput.New()
 	ti.CharLimit = 512
@@ -109,7 +110,7 @@ func newTasksInteractiveModel(db *sql.DB) *tasksInteractiveModel {
 }
 
 func (m *tasksInteractiveModel) Init() tea.Cmd {
-	return nil
+	return tea.WindowSize()
 }
 
 func (m *tasksInteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -117,16 +118,17 @@ func (m *tasksInteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		listH := msg.Height - 14
-		if listH < 6 {
-			listH = 6
-		}
 		listW := msg.Width - 4
 		if listW < 20 {
 			listW = 20
 		}
+		listH := m.layoutMenuListHeight(msg.Height)
 		m.list.SetSize(listW, listH)
-		m.input.Width = min(listW-4, 72)
+		if msg.Width > 6 {
+			m.input.Width = msg.Width - 6
+		} else {
+			m.input.Width = min(listW-4, 72)
+		}
 		return m, nil
 	}
 
@@ -190,6 +192,41 @@ func (m *tasksInteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m *tasksInteractiveModel) viewHeader() string {
+	return tasksBorder.Render(lipgloss.JoinVertical(lipgloss.Left,
+		tasksAccent.Render("Tasks"),
+		tasksMuted.Render("Now: "+time.Now().Format("Mon 02 Jan 2006, 03:04:05 PM")),
+	))
+}
+
+func (m *tasksInteractiveModel) menuHelpLine() string {
+	return tasksMuted.Render("↑/↓ move • 1–7 highlight • same key again or enter to open • q quit")
+}
+
+// layoutMenuListHeight is the list viewport height so header + list + footer fit the terminal
+// (footer pinned to the bottom via Place).
+func (m *tasksInteractiveModel) layoutMenuListHeight(termH int) int {
+	headerH := lipgloss.Height(m.viewHeader())
+	helpH := lipgloss.Height(m.menuHelpLine())
+	gap := 2 // JoinVertical "" between header, list, and help
+	avail := termH - headerH - helpH - gap
+	if avail < 1 {
+		return 1
+	}
+	return avail
+}
+
+func (m *tasksInteractiveModel) placeInTerminal(content string, vPos lipgloss.Position) string {
+	w, h := m.width, m.height
+	if w <= 0 {
+		w = 80
+	}
+	if h <= 0 {
+		h = 24
+	}
+	return lipgloss.Place(w, h, lipgloss.Left, vPos, content)
 }
 
 func (m *tasksInteractiveModel) menuEnter() (tea.Model, tea.Cmd) {
@@ -417,16 +454,12 @@ func (m *tasksInteractiveModel) taskSelectionPrompt(includeCompleted bool) strin
 }
 
 func (m *tasksInteractiveModel) View() string {
-	header := tasksBorder.Render(lipgloss.JoinVertical(lipgloss.Left,
-		tasksAccent.Render("Tasks"),
-		// tasksMuted.Render("Now: "+time.Now().Format("Mon 02 Jan 2006  15:04:05")),
-		tasksMuted.Render("Now: "+time.Now().Format("Mon 02 Jan 2006, 03:04:05 PM")),
-	))
+	header := m.viewHeader()
 
 	switch m.phase {
 	case tuiPhaseMenu:
-		help := tasksMuted.Render("↑/↓ move • 1–7 highlight • same key again or enter to open • q quit")
-		return lipgloss.JoinVertical(lipgloss.Left, header, "", m.list.View(), "", help)
+		stack := lipgloss.JoinVertical(lipgloss.Left, header, "", m.list.View(), "", m.menuHelpLine())
+		return m.placeInTerminal(stack, lipgloss.Bottom)
 
 	case tuiPhaseInput:
 		var prompt string
@@ -450,7 +483,8 @@ func (m *tasksInteractiveModel) View() string {
 			"",
 			tasksMuted.Render("<esc> cancel • <enter> submit"),
 		)
-		return lipgloss.JoinVertical(lipgloss.Left, header, "", body)
+		stack := lipgloss.JoinVertical(lipgloss.Left, header, "", body)
+		return m.placeInTerminal(stack, lipgloss.Top)
 
 	case tuiPhaseOutput:
 		var b strings.Builder
@@ -472,7 +506,8 @@ func (m *tasksInteractiveModel) View() string {
 		} else {
 			b.WriteString(tasksMuted.Render("any key to continue"))
 		}
-		return lipgloss.JoinVertical(lipgloss.Left, header, "", b.String())
+		stack := lipgloss.JoinVertical(lipgloss.Left, header, "", b.String())
+		return m.placeInTerminal(stack, lipgloss.Top)
 	}
 
 	return ""
