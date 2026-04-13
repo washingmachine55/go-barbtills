@@ -12,7 +12,6 @@ import (
 	"strings"
 	"syscall"
 	"text/tabwriter"
-	"time"
 
 	"github.com/common-nighthawk/go-figure"
 	"github.com/fatih/color"
@@ -70,11 +69,14 @@ Use this shit at your own risk lol.`,
 		if av {
 			Logger.Info("[CURRENT VERSION]", "barbtils", APP_VERSION)
 		}
-		go func() {
-            time.Sleep(5 * time.Second)
-            fmt.Fprintln(os.Stderr, "Error: Command timed out!")
-            os.Exit(1)
-        }()
+		// streamC, _ := streamTextCmd.Flags().GetBool("serve");
+		// if !streamC {
+		// 	go func() {
+		// 		time.Sleep(5 * time.Second)
+		// 		fmt.Fprintln(os.Stderr, "Error: Command timed out!")
+		// 		os.Exit(1)
+		// 	}()
+		// }
 	},
 }
 
