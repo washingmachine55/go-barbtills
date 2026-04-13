@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -50,14 +51,15 @@ func openTasksDB() (*sql.DB, error) {
 }
 
 var (
-	flagInteractive bool
-	flagStopTask    int
-	flagTaskID      int
-	flagStopShort   bool
-	flagGetTasks    bool
-	flagRunning     bool
-	flagNewTask     string
-	flagShowTask    int
+	flagInteractive   bool
+	flagStopTask      int
+	flagTaskID        int
+	flagStopShort     bool
+	flagGetTasks      bool
+	flagRunning       bool
+	flagNewTask       string
+	flagShowTask      int
+	flagTruncateTable string
 )
 
 var tasksCmd = &cobra.Command{
@@ -72,7 +74,8 @@ Examples:
   barbtils tasks --stop_task 53        Stop timer for task ID 53
   barbtils tasks -s -t 53              Same (short form: stop + task id)
   barbtils tasks --new "My task"       Create a new task
-  barbtils tasks --show 12             Show details for task ID 12`,
+  barbtils tasks --show 12             Show details for task ID 12
+  barbtils tasks --truncate yes        Removes all tasks, and resets counter to 1`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if flagInteractive {
 			db, err := openTasksDB()
@@ -128,6 +131,20 @@ Examples:
 			return showSpecificTimer(db, flagShowTask, nil)
 		}
 
+		allowedString := []string{"yes","y","1"}
+		if flagTruncateTable != "" {
+			flagTruncateTable = strings.ToLower(flagTruncateTable)
+			if slices.Contains(allowedString, flagTruncateTable) {
+				db, err := openTasksDB()
+				if err != nil {
+					return err
+				}
+				return truncateAllTasks(db, os.Stdout)
+			} else {
+				return fmt.Errorf("Please confirm with Yes, Y or 1")
+			}
+		}
+
 		fmt.Println(tasksMuted.Render("No action selected."))
 		fmt.Println(tasksMuted.Render("Run with --help to see options, or use -i for the interactive menu."))
 		return nil
@@ -168,14 +185,14 @@ func saveNewTask(db *sql.DB, name string, w io.Writer) error {
 func savedEditedTask(db *sql.DB, taskID int, endTime time.Time, w io.Writer) error {
 	w = taskWriter(w)
 	row := db.QueryRow(
-		`UPDATE tasks SET end_time = $1 WHERE id = $2 RETURNING id, task_name, start_time, end_time`,
+		`UPDATE tasks SET end_time = $1 WHERE id = $2 AND end_time IS null RETURNING id, task_name, start_time, end_time`,
 		endTime, taskID,
 	)
 
 	var t Task
 	if err := row.Scan(&t.ID, &t.TaskName, &t.StartTime, &t.EndTime); err != nil {
 		if err == sql.ErrNoRows {
-			return fmt.Errorf("no task found with ID %d", taskID)
+			return fmt.Errorf("no running task found with ID %d", taskID)
 		}
 		return fmt.Errorf("update failed: %w", err)
 	}
@@ -208,10 +225,10 @@ func getAllRunningTimers(db *sql.DB, isCompleted bool, w io.Writer) error {
 	var query string
 	var title string
 	if isCompleted {
-		query = `SELECT id, task_name, start_time FROM tasks WHERE end_time IS NOT NULL ORDER BY id`
+		query = `SELECT id, task_name, start_time, end_time FROM tasks WHERE end_time IS NOT NULL ORDER BY id`
 		title = "Completed tasks"
 	} else {
-		query = `SELECT id, task_name, start_time FROM tasks WHERE end_time IS NULL ORDER BY id`
+		query = `SELECT id, task_name, start_time, end_time FROM tasks WHERE end_time IS NULL ORDER BY id`
 		title = "Running tasks"
 	}
 
@@ -221,37 +238,39 @@ func getAllRunningTimers(db *sql.DB, isCompleted bool, w io.Writer) error {
 	}
 	defer rows.Close()
 
-	type rowT struct {
-		id   int
-		name string
-		startTime time.Time
-	}
-	var list []rowT
+	var tasks []Task
 	for rows.Next() {
-		var id int
-		var name sql.NullString
-		var startTime time.Time
-		if err := rows.Scan(&id, &name, &startTime); err != nil {
+		var task Task
+		if err := rows.Scan(&task.ID, &task.TaskName, &task.StartTime, &task.EndTime); err != nil {
 			return err
 		}
-		list = append(list, rowT{id: id, name: nullStrDisplay(name), startTime: startTime})
+		tasks = append(tasks, task)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
 
 	fmt.Fprintln(w, tasksAccent.Render(title))
-	if len(list) == 0 {
+	if len(tasks) == 0 {
 		fmt.Fprintln(w, tasksMuted.Render("  (none)"))
 		return nil
 	}
 
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tTASK\tSTART TIME")
-	for _, r := range list {
-		fmt.Fprintf(tw, "%d\t%s\t%s\n", r.id, r.name, r.startTime.Format("2006-01-02 - 15:04:05 AM"))
+	if isCompleted {
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "ID\tTASK\tSTART TIME\tEND TIME\tTOTAL TASK TIME")
+		for _, r := range tasks {
+			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", r.ID, r.TaskName.String, r.StartTime.Format("03:04:05 PM"), r.EndTime.Time.Format("03:04:05 PM"), tasksAccent.Render(getHumanReadabletimeDiff(r, w, false)))
+		}
+		return tw.Flush()
+	} else {
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "ID\tTASK\tSTART TIME\tElapsed Time")
+		for _, r := range tasks {
+			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\n", r.ID, r.TaskName.String, r.StartTime.Format("03:04:05 PM"), tasksAccent.Render(getHumanReadabletimeDiff(r, w, false)))
+		}
+		return tw.Flush()
 	}
-	return tw.Flush()
 }
 
 func showSpecificTimer(db *sql.DB, id int, w io.Writer) error {
@@ -267,20 +286,28 @@ func showSpecificTimer(db *sql.DB, id int, w io.Writer) error {
 	}
 
 	fmt.Fprintln(w, tasksAccent.Render("Task #"+strconv.Itoa(t.ID)))
-	fmt.Fprintln(w, tasksAccent.Render("Start time"+ t.StartTime.String()))
 	fmt.Fprintln(w, formatTaskBlock(t))
 
+	fmt.Fprintln(w, tasksWarn.Render("Elapsed ")+tasksAccent.Render(getHumanReadabletimeDiff(t, w, true)))
+	return nil
+}
+
+func getHumanReadabletimeDiff(t Task, w io.Writer, status bool) string {
 	var diff time.Duration
 	if !t.EndTime.Valid {
-		diff = time.Since(t.StartTime)
-		fmt.Fprintln(w, tasksWarn.Render("Status: running"))
+		// diff = time.Now().In(time.Local).Sub(t.StartTime)
+		diff = time.Now().UTC().Sub(t.StartTime.UTC())
+		if status {
+			fmt.Fprintln(w, tasksWarn.Render("Status: running"))
+		}
 	} else {
 		diff = t.EndTime.Time.Sub(t.StartTime)
-		fmt.Fprintln(w, tasksMuted.Render("Status: completed"))
+		if status {
+			fmt.Fprintln(w, tasksMuted.Render("Status: completed"))
+		}
 	}
 
-	fmt.Fprintln(w, tasksWarn.Render("Elapsed ")+tasksAccent.Render(fmtDuration(diff)))
-	return nil
+	return fmtDuration(diff)
 }
 
 func fmtDuration(d time.Duration) string {
@@ -340,6 +367,7 @@ func init() {
 	tasksCmd.Flags().IntVarP(&flagTaskID, "task-id", "t", 0, "Task ID (use with -s)")
 	tasksCmd.Flags().StringVarP(&flagNewTask, "new", "n", "", "Create a new task with given name")
 	tasksCmd.Flags().IntVar(&flagShowTask, "show", 0, "Show details for task ID")
+	tasksCmd.Flags().StringVar(&flagTruncateTable, "truncate", "", "Truncate all data in the tasks table. \nAcceptabled values are 'Y', 'Yes', or 1")
 
 	RootCmd.AddCommand(tasksCmd)
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -210,7 +211,7 @@ func (m *tasksInteractiveModel) menuEnter() (tea.Model, tea.Cmd) {
 		m.phase = tuiPhaseInput
 		m.inputFor = menuTruncate
 		m.input.SetValue("")
-		m.input.Placeholder = "type YES to confirm"
+		m.input.Placeholder = "type YES/Y/1 to confirm"
 		m.input.Focus()
 		return m, textinput.Blink
 	}
@@ -256,8 +257,11 @@ func (m *tasksInteractiveModel) submitInput() (tea.Model, tea.Cmd) {
 		err = showSpecificTimer(m.db, id, &buf)
 
 	case menuTruncate:
-		answer := strings.ToLower(strings.TrimSpace(m.input.Value()))
-		if answer == "yes" {
+		// var answer any = strings.ToLower(strings.TrimSpace(m.input.Value()))
+		// if answer == "yes" {
+		allowedString := []string{"yes","y","1"}
+		var answer string = m.input.Value()
+		if slices.Contains(allowedString, strings.ToLower(answer)) {
 			err = truncateAllTasks(m.db, &buf)
 		} else {
 			fmt.Fprintln(&buf, tasksMuted.Render("Cancelled."))
@@ -290,7 +294,8 @@ func (m *tasksInteractiveModel) finishInputWithError(msg string) {
 func (m *tasksInteractiveModel) View() string {
 	header := tasksBorder.Render(lipgloss.JoinVertical(lipgloss.Left,
 		tasksAccent.Render("Tasks"),
-		tasksMuted.Render("Now: "+time.Now().Format("Mon 02 Jan 2006  15:04:05")),
+		// tasksMuted.Render("Now: "+time.Now().Format("Mon 02 Jan 2006  15:04:05")),
+		tasksMuted.Render("Now: "+time.Now().Format("Mon 02 Jan 2006, 03:04:05 PM")),
 	))
 
 	switch m.phase {
