@@ -1,20 +1,18 @@
-/*
-Copyright © 2026 NAME HERE <EMAIL ADDRESS>
-*/
 package cmd
 
 import (
 	"embed"
 	"encoding/json"
-	"flag"
 	"html/template"
 	"io"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/felixge/httpsnoop"
 	"github.com/fsnotify/fsnotify"
 	"github.com/gorilla/websocket"
 	_ "github.com/lib/pq"
@@ -31,7 +29,15 @@ var streamTextCmd = &cobra.Command{
 and usage of using your command. `,
 	Run: func(cmd *cobra.Command, args []string) {
 		Logger.Debug("streamTextCmd called")
-		webSocketServer()
+		fileServe, _ := cmd.Flags().GetString("file")
+		if fileServe != "" {
+			authOpt, _ := cmd.Flags().GetBool("auth")
+			if authOpt {
+				webSocketServer(true)
+			} else {
+				webSocketServer(false)
+			}
+		}
 	},
 }
 
@@ -39,7 +45,9 @@ var filePath string
 
 func init() {
 	RootCmd.AddCommand(streamTextCmd)
-	streamTextCmd.PersistentFlags().StringVarP(&filePath, "serve", "s", "", "serve the websocket")
+	streamTextCmd.PersistentFlags().StringVarP(&filePath, "file", "f", "", "serve the server using the given filepath")
+	streamTextCmd.PersistentFlags().StringVarP(&addr, "port", "p", "8080", "server port to use")
+	streamTextCmd.PersistentFlags().Bool("auth", false, "makes sure that access require authentication")
 
 	b, err := streamtextEmbed.ReadFile("streamtext/home.html")
 	if err != nil {
@@ -56,7 +64,7 @@ const (
 )
 
 var (
-	addr      = flag.String("addr", ":8080", "http service address")
+	addr      string
 	homeTempl *template.Template
 	filename  string
 	upgrader  = websocket.Upgrader{
@@ -278,18 +286,64 @@ func saveStreamedFile(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func webSocketServer() {
+func webSocketServer(auth bool) {
 	filename = filePath
 	assetsFS, err := fs.Sub(streamtextEmbed, "streamtext")
 	if err != nil {
 		log.Fatal("streamtext assets:", err)
 	}
+
+	if auth {
+		Logger.Debug("Using Auth ")
+		sessionToken = generatePassphrase()
+		Logger.Infof("[SESSION TOKEN: %s]", sessionToken)  // prints to terminal
+	}
+
 	http.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(assetsFS))))
 	http.HandleFunc("/", serveHome)
 	http.HandleFunc("/ws", serveWs)
 	http.HandleFunc("/content", serveContent)
 	http.HandleFunc("/save", saveStreamedFile)
-	if err := http.ListenAndServe(*addr, nil); err != nil {
+	
+	var skipLog = map[string]bool{
+		"/assets/": true,
+	}
+	// wrappedH wraps myH in order to log every request.
+	wrappedH := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		shouldSkip := false
+		for prefix := range skipLog {
+			if strings.HasPrefix(r.URL.Path, prefix) {
+				shouldSkip = true
+				break
+			}
+		}
+
+		if shouldSkip {
+			// Still serve the request, just don't log it
+			http.DefaultServeMux.ServeHTTP(w, r)
+			return
+		}
+		
+		m := httpsnoop.CaptureMetrics(http.DefaultServeMux, w, r)
+		Logger.Debug("[HTTP LOGGER]",
+			"Method",
+			r.Method,
+			"Endpoint",
+			r.URL,
+			"Status Code",
+			m.Code,
+			"Duration",
+			m.Duration,
+		)
+	})
+
+	var finalH http.Handler = wrappedH
+	if auth {
+		finalH = authMiddleware(wrappedH)
+	}
+
+	Logger.Infof("[SERVER SERVING @ localhost:%s]", addr)
+	if err := http.ListenAndServe(":"+addr, finalH); err != nil {
 		log.Fatal(err)
 	}
 }
