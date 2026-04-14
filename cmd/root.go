@@ -21,7 +21,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-const APP_VERSION string = "1.3"
+const APP_VERSION string = "1.4"
 
 var cfgFile string
 var (
@@ -96,14 +96,15 @@ func Execute() {
 }
 
 func init() {
-	cobra.OnInitialize(loggerInit, initConfig)
+	cobra.OnInitialize(loggerInit)
+	cobra.OnInitialize(initConfig)
 	// cobra.OnInitialize(initDB)
 
 	// Here you will define your flags and configuration settings.
 	// Cobra supports persistent flags, which, if defined here,
 	// will be global for your application.
 
-	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.config/barbtils/config.toml)")
+	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", "$HOME/.config/barbtils/config.toml", "config file path")
 	RootCmd.PersistentFlags().BoolP("debug", "d", false, "Set Log level to debug")
 	RootCmd.PersistentFlags().BoolP("version", "v", false, "Print app version")
 
@@ -139,7 +140,12 @@ func initConfig() {
 
 	// // If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err != nil {
-		fmt.Fprintln(os.Stderr, "Using config file:", viper.ConfigFileUsed())
+		// fmt.Fprintln(os.Stderr, "No config file found", viper.ConfigFileUsed())
+		Logger.Debugf("No config file found @ %s", viper.ConfigFileUsed())
+	} else {
+		Logger.Debug("[Config]", "Using config file @", viper.ConfigFileUsed())
+		//TODO - The message above does not show due to the lifecycle of the program. 
+		// Logger level starts at info, if the user start the program with the debug flag, it will initialize logger, run this function and only then set logger level, which is why this debug never runs
 	}
 }
 
