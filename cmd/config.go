@@ -30,12 +30,13 @@ const sepLine string = "========================================================
 
 func loggerInit() {
 	Logger = log.NewWithOptions(os.Stderr, log.Options{
-    	// ReportCaller: true,
-		// ReportTimestamp: true,
-		// TimeFormat: time.Second.String(),
+		// ReportCaller: true,
+		ReportTimestamp: true,
+		TimeFormat: "[03:04:05 PM]",
 	})
 	Logger.SetLevel(log.InfoLevel)
 	Logger.SetOutput(os.Stderr)
+	
 
 	styles := log.DefaultStyles()
 	styles.Levels[log.FatalLevel] = lipgloss.NewStyle().
@@ -44,7 +45,7 @@ func loggerInit() {
 		Background(lipgloss.Color("204")).
 		Foreground(lipgloss.Color("0"))
 	// Add a custom style for key `err`
-	styles.Keys["err"] = lipgloss.NewStyle().Foreground(lipgloss.Color("204"))
+	styles.Keys["err"] = lipgloss.NewStyle().Foreground(lipgloss.Color("204")).Italic(true)
 	styles.Values["err"] = lipgloss.NewStyle().Bold(true)
 	
 	Logger.SetStyles(styles)

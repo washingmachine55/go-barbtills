@@ -342,7 +342,8 @@ func webSocketServer(auth bool) {
 		finalH = authMiddleware(wrappedH)
 	}
 
-	Logger.Infof("[SERVER SERVING @ localhost:%s]", addr)
+	Logger.Infof("[SERVER SERVING @ http%s://localhost:%s]", "", addr)
+
 	if err := http.ListenAndServe(":"+addr, finalH); err != nil {
 		log.Fatal(err)
 	}
