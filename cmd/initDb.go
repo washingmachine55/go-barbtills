@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	l "barbtils/internal/logger"
 	"database/sql"
 	"fmt"
 
@@ -19,7 +20,7 @@ var initDbCmd = &cobra.Command{
 	Long: `A longer description that spans multiple lines and likely contains examples
 and usage of using your command. `,
 	Run: func(cmd *cobra.Command, args []string) {
-		Logger.Debug("initDb called")
+		l.Logger.Debug("initDb called")
 			initDB()
 	},
 }

@@ -4,6 +4,7 @@ Copyright © 2026 Ahmed Babar
 package cmd
 
 import (
+	l "barbtils/internal/logger"
 	"bufio"
 	"fmt"
 	"io"
@@ -43,12 +44,12 @@ so that I can stay alive as a functional human being.
 Use this shit at your own risk lol.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		if asciiArt != "" && asciiArt != "-" {
-			Logger.Debugf("Used Opts: %s", asciiOpts)
+			l.Logger.Debugf("Used Opts: %s", asciiOpts)
 			asciiArting(asciiArt, asciiOpts)
-			// Logger.Warnf("Output: %s", m)
+			// l.Logger.Warnf("Output: %s", m)
 		}
 		if asciiOptsHelp != false {
-			Logger.Info("Available options are: ")
+			l.Logger.Info("Available options are: ")
 			printFontTable()
 		}
 		val := asciiArt
@@ -57,7 +58,7 @@ Use this shit at your own risk lol.`,
 			reader := bufio.NewReader(os.Stdin)
 			content, _ := io.ReadAll(reader)
 			val = string(content)
-			Logger.Debug(os.Stderr, "DEBUG: raw input received: %q\n", val)
+			l.Logger.Debug(os.Stderr, "DEBUG: raw input received: %q\n", val)
 			// Process 'val'
 			asciiArting(strings.TrimSpace(val), asciiOpts)
 		}
@@ -66,12 +67,12 @@ Use this shit at your own risk lol.`,
 		debug, _ := cmd.Flags().GetBool("debug")
 		if debug {
 			LoggerSetLevelDebug()
-			Logger.Debug("Logger Set to Debug")
+			l.Logger.Debug("Logger Set to Debug")
 		}
 		initConfig()
 		av, _ := cmd.Flags().GetBool("version")
 		if av {
-			Logger.Info("[CURRENT VERSION]", "barbtils", APP_VERSION)
+			l.Logger.Info("[CURRENT VERSION]", "barbtils", APP_VERSION)
 		}
 		// Only the root command (no subcommand) inherits this timeout; avoids killing `tasks` and others.
 		if cmd.Parent() != nil {
@@ -100,7 +101,7 @@ func Execute() {
 }
 
 func init() {
-	cobra.OnInitialize(loggerInit)
+	cobra.OnInitialize(l.LoggerInit)
 	// cobra.OnInitialize(initDB)
 
 	// Here you will define your flags and configuration settings.
@@ -131,7 +132,7 @@ func initConfig() {
 		// Use config file from the flag.
 		viper.SetConfigFile(cfgFile)
 		// TODO
-		Logger.Debug("Have to create something something that outputs the example json file.")
+		l.Logger.Debug("Have to create something something that outputs the example json file.")
 	} else {
 		home, err := os.UserHomeDir()
 		cobra.CheckErr(err)
@@ -143,9 +144,9 @@ func initConfig() {
 	// // If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err != nil {
 		// fmt.Fprintln(os.Stderr, "No config file found", viper.ConfigFileUsed())
-		Logger.Debugf("No config file found @ %s", viper.ConfigFileUsed())
+		l.Logger.Debugf("No config file found @ %s", viper.ConfigFileUsed())
 	} else {
-		Logger.Debug("[Config]", "Using config file @", viper.ConfigFileUsed())
+		l.Logger.Debug("[Config]", "Using config file @", viper.ConfigFileUsed())
 		// TODO - The message above does not show due to the lifecycle of the program.
 		// Logger level starts at info, if the user start the program with the debug flag, it will initialize logger, run this function and only then set logger level, which is why this debug never runs
 	}
@@ -155,7 +156,7 @@ var availableFonts = []string{"3-d", "3x5", "5lineoblique", "acrobatic", "alliga
 
 func asciiArting(m string, font string) {
 	if m == "" {
-		Logger.Fatal("Can't proceed with Nil Chars")
+		l.Logger.Fatal("Can't proceed with Nil Chars")
 	}
 
 	fontSet := make(map[string]struct{}) // Use an empty struct{} for memory efficiency
@@ -167,7 +168,7 @@ func asciiArting(m string, font string) {
 	// Check for presence using the map
 	_, found := fontSet[font]
 	if found == false {
-		Logger.Fatalf("Selected font '%s' is not available in the Font List", font)
+		l.Logger.Fatalf("Selected font '%s' is not available in the Font List", font)
 	}
 	myFigure := figure.NewFigure(m, font, true)
 	wolu := myFigure.ColorString()

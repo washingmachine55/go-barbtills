@@ -1,9 +1,8 @@
 package cmd
 
 import (
-	"os"
+	l "barbtils/internal/logger"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 )
@@ -19,42 +18,17 @@ Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		Logger.Debug("config called")
-		loggerInit()
-		Logger.Debug("Logger initiated")
+		l.Debug("config called")
+		l.LoggerInit()
+		l.Debug("Logger initiated")
 	},
 }
 
-var Logger *log.Logger
-const sepLine string = "===========================================================\n"
-
-func loggerInit() {
-	Logger = log.NewWithOptions(os.Stderr, log.Options{
-		// ReportCaller: true,
-		ReportTimestamp: true,
-		TimeFormat: "[03:04:05 PM]",
-	})
-	Logger.SetLevel(log.InfoLevel)
-	Logger.SetOutput(os.Stderr)
-	
-
-	styles := log.DefaultStyles()
-	styles.Levels[log.FatalLevel] = lipgloss.NewStyle().
-		SetString("FATAL 💀").
-		Padding(0, 1, 0, 1).
-		Background(lipgloss.Color("204")).
-		Foreground(lipgloss.Color("0"))
-	// Add a custom style for key `err`
-	styles.Keys["err"] = lipgloss.NewStyle().Foreground(lipgloss.Color("204")).Italic(true)
-	styles.Values["err"] = lipgloss.NewStyle().Bold(true)
-	
-	Logger.SetStyles(styles)
-}
+const SepLine string = "===========================================================\n"
 
 func LoggerSetLevelDebug() {
-	Logger.SetLevel(log.DebugLevel)
+	l.Logger.SetLevel(log.DebugLevel)
 }
-
 
 func init() {
 	RootCmd.AddCommand(configCmd)

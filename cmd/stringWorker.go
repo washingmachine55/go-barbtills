@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	l "barbtils/internal/logger"
 	"fmt"
 	"os"
 	"regexp"
@@ -20,26 +21,26 @@ var stringWorker = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		pretty, _ := cmd.Flags().GetBool("pretty")
 		if message != "" && webshit == false {
-			Logger.Debug("Starting Text Process")
+			l.Logger.Debug("Starting Text Process")
 			process := processText(message)
 			total := calculateTotalSeconds(process)
 			if pretty {
 				formatResult(total, true)
-				Logger.Debug("\nFinished Text Process")
+				l.Logger.Debug("\nFinished Text Process")
 			} else {
 				formatResult(total, false)
-				Logger.Debug("Finished Text Process")
+				l.Logger.Debug("Finished Text Process")
 			}
 		}
 		if message != "" && webshit == true {
-			Logger.Debug("Starting Text Process")
+			l.Logger.Debug("Starting Text Process")
 			total := calculateTotalSeconds(message)
 			if pretty {
 				formatResult(total, true)
 			} else {
 				formatResult(total, false)
 			}
-			Logger.Debug("Finished Text Process")
+			l.Logger.Debug("Finished Text Process")
 		}
 	},
 }
@@ -58,18 +59,18 @@ func init() {
 func processText(message string) (string) {
 	hoursAndMinsReGex, err := regexp.Compile(`(\d\d:\d\d)`)
 	if err != nil {
-		Logger.Fatal(err)
+		l.Logger.Fatal(err)
 	}
 	
 	matches := hoursAndMinsReGex.FindAllString(message,-1)
-	Logger.Debug("[MATCHES LENGTH]", "Matches Arr", len(matches))
-	Logger.Debug("[PROCESSED TEXT]", "Matches Arr", matches)
+	l.Logger.Debug("[MATCHES LENGTH]", "Matches Arr", len(matches))
+	l.Logger.Debug("[PROCESSED TEXT]", "Matches Arr", matches)
 
 	str := strings.Join(matches, "m + ")
 	str = fmt.Sprint(str + "m")
 	str = strings.ReplaceAll(str, ":", "h ")
 	
-	Logger.Debug("New String", "str", str)
+	l.Logger.Debug("New String", "str", str)
 	
 
 	return str
@@ -121,11 +122,11 @@ func formatResult(totalSec int64, pretty bool) {
 
 	if !pretty {
 		// Output exactly like your screenshot
-		Logger.Printf("= %dd %dh %dm %ds", d, h, m, s)
-		Logger.Printf("= %10.6f d", float64(totalSec)/86400.0)
-		Logger.Printf("= %10.5f h", float64(totalSec)/3600.0)
-		Logger.Printf("= %10.3f m", float64(totalSec)/60.0)
-		Logger.Printf("= %10d s", totalSec)
+		l.Logger.Printf("= %dd %dh %dm %ds", d, h, m, s)
+		l.Logger.Printf("= %10.6f d", float64(totalSec)/86400.0)
+		l.Logger.Printf("= %10.5f h", float64(totalSec)/3600.0)
+		l.Logger.Printf("= %10.3f m", float64(totalSec)/60.0)
+		l.Logger.Printf("= %10d s", totalSec)
 	} else {
 		pewp := fmt.Sprintf("%dd %dh %dm %ds", d, h, m, s)
 		// fmt.Printf("%dd %dh %dm %ds", d, h, m, s)

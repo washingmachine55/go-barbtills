@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	l "barbtils/internal/logger"
 	"embed"
 	"encoding/json"
 	"html/template"
@@ -28,7 +29,7 @@ var streamTextCmd = &cobra.Command{
 	Long: `A longer description that spans multiple lines and likely contains examples
 and usage of using your command. `,
 	Run: func(cmd *cobra.Command, args []string) {
-		Logger.Debug("streamTextCmd called")
+		l.Logger.Debug("streamTextCmd called")
 		fileServe, _ := cmd.Flags().GetString("file")
 		if fileServe != "" {
 			authOpt, _ := cmd.Flags().GetBool("auth")
@@ -294,9 +295,9 @@ func webSocketServer(auth bool) {
 	}
 
 	if auth {
-		Logger.Debug("Using Auth ")
+		l.Logger.Debug("Using Auth ")
 		sessionToken = generatePassphrase()
-		Logger.Infof("[SESSION TOKEN: %s]", sessionToken)  // prints to terminal
+		l.Logger.Infof("[SESSION TOKEN: %s]", sessionToken)  // prints to terminal
 	}
 
 	http.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(assetsFS))))
@@ -325,7 +326,7 @@ func webSocketServer(auth bool) {
 		}
 		
 		m := httpsnoop.CaptureMetrics(http.DefaultServeMux, w, r)
-		Logger.Debug("[HTTP LOGGER]",
+		l.Logger.Debug("[HTTP LOGGER]",
 			"Method",
 			r.Method,
 			"Endpoint",
@@ -342,7 +343,7 @@ func webSocketServer(auth bool) {
 		finalH = authMiddleware(wrappedH)
 	}
 
-	Logger.Infof("[SERVER SERVING @ http%s://localhost:%s]", "", addr)
+	l.Logger.Infof("[SERVER SERVING @ http%s://localhost:%s]", "", addr)
 
 	if err := http.ListenAndServe(":"+addr, finalH); err != nil {
 		log.Fatal(err)
