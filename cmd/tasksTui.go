@@ -8,11 +8,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type tuiPhase uint8
@@ -45,16 +44,17 @@ func (e menuEntry) Description() string { return e.desc }
 func (e menuEntry) FilterValue() string { return e.title }
 
 type tasksInteractiveModel struct {
-	db       *sql.DB
-	phase    tuiPhase
-	list     list.Model
-	input    textinput.Model
-	inputFor menuTag
-	inputCtx string
-	output   string
-	errLine  string
-	width    int
-	height   int
+	db          *sql.DB
+	phase       tuiPhase
+	menuEntries []menuEntry
+	menuIndex   int
+	inputFor    menuTag
+	inputCtx    string
+	inputValue  string
+	output      string
+	errLine     string
+	width       int
+	height      int
 }
 
 func newTasksInteractiveModel(db *sql.DB) *tasksInteractiveModel {
@@ -70,7 +70,7 @@ func newTasksInteractiveModel(db *sql.DB) *tasksInteractiveModel {
 		{"Truncate all tasks", "Deletes every row — needs YES", menuTruncate},
 		{"Quit", "Leave interactive mode", menuQuit},
 	}
-	items := make([]list.Item, len(menuDefs))
+	items := make([]menuEntry, len(menuDefs))
 	for i, d := range menuDefs {
 		items[i] = menuEntry{
 			title: fmt.Sprintf("%d. %s", i+1, d.title),
@@ -79,38 +79,17 @@ func newTasksInteractiveModel(db *sql.DB) *tasksInteractiveModel {
 		}
 	}
 
-	delegate := list.NewDefaultDelegate()
-	delegate.ShowDescription = true
-	st := delegate.Styles
-	st.SelectedTitle = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(lipgloss.Color("62")).Foreground(lipgloss.Color("86")).Bold(true).Padding(0, 0, 0, 1)
-	st.SelectedDesc = st.SelectedTitle.Copy().Foreground(lipgloss.Color("245")).Bold(false)
-	st.NormalTitle = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Padding(0, 0, 0, 2)
-	st.NormalDesc = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Padding(0, 0, 0, 2)
-	delegate.Styles = st
-
-	l := list.New(items, delegate, 40, 20)
-	l.SetFilteringEnabled(false)
-	l.SetShowTitle(false)
-	l.DisableQuitKeybindings()
-	l.SetShowStatusBar(false)
-	l.SetShowPagination(true)
-	l.SetShowHelp(false)
-
-	ti := textinput.New()
-	ti.CharLimit = 512
-	ti.Width = 40
-
 	return &tasksInteractiveModel{
-		db:    db,
-		phase: tuiPhaseMenu,
-		list:  l,
-		input: ti,
+		db:          db,
+		phase:       tuiPhaseMenu,
+		menuEntries: items,
 	}
 }
 
 func (m *tasksInteractiveModel) Init() tea.Cmd {
-	return tea.WindowSize()
+	return func() tea.Msg {
+		return tea.RequestWindowSize()
+	}
 }
 
 func (m *tasksInteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -118,17 +97,6 @@ func (m *tasksInteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		listW := msg.Width - 4
-		if listW < 20 {
-			listW = 20
-		}
-		listH := m.layoutMenuListHeight(msg.Height)
-		m.list.SetSize(listW, listH)
-		if msg.Width > 6 {
-			m.input.Width = msg.Width - 6
-		} else {
-			m.input.Width = min(listW-4, 72)
-		}
 		return m, nil
 	}
 
@@ -151,19 +119,30 @@ func (m *tasksInteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tuiPhaseInput:
-		if km, ok := msg.(tea.KeyMsg); ok {
-			switch km.String() {
-			case "ctrl+c", "esc":
-				m.phase = tuiPhaseMenu
-				m.input.Blur()
-				return m, nil
-			case "enter":
-				return m.submitInput()
-			}
+		kp, ok := msg.(tea.KeyPressMsg)
+		if !ok {
+			return m, nil
 		}
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
-		return m, cmd
+		switch kp.String() {
+		case "ctrl+c", "esc":
+			m.phase = tuiPhaseMenu
+			return m, nil
+		case "enter":
+			return m.submitInput()
+		case "backspace", "ctrl+h":
+			m.inputValue = trimLastRune(m.inputValue)
+			return m, nil
+		}
+
+		// Use Key.Text so space and other printables work; String() reports "space", not " ".
+		k := kp.Key()
+		if k.Text != "" {
+			if len(m.inputValue)+len(k.Text) <= 512 {
+				m.inputValue += k.Text
+			}
+			return m, nil
+		}
+		return m, nil
 
 	case tuiPhaseMenu:
 		if km, ok := msg.(tea.KeyMsg); ok {
@@ -172,23 +151,31 @@ func (m *tasksInteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			case "enter":
 				return m.menuEnter()
+			case "up", "k":
+				if len(m.menuEntries) > 0 {
+					m.menuIndex = (m.menuIndex - 1 + len(m.menuEntries)) % len(m.menuEntries)
+				}
+				return m, nil
+			case "down", "j":
+				if len(m.menuEntries) > 0 {
+					m.menuIndex = (m.menuIndex + 1) % len(m.menuEntries)
+				}
+				return m, nil
 			}
 			if key := km.String(); len(key) == 1 {
 				c := key[0]
-				n := len(m.list.Items())
+				n := len(m.menuEntries)
 				if n > 0 && n <= 9 && c >= '1' && c <= byte('0'+n) {
 					idx := int(c - '1')
-					if m.list.Index() == idx {
+					if m.menuIndex == idx {
 						return m.menuEnter()
 					}
-					m.list.Select(idx)
+					m.menuIndex = idx
 					return m, nil
 				}
 			}
 		}
-		var cmd tea.Cmd
-		m.list, cmd = m.list.Update(msg)
-		return m, cmd
+		return m, nil
 	}
 
 	return m, nil
@@ -205,17 +192,18 @@ func (m *tasksInteractiveModel) menuHelpLine() string {
 	return tasksMuted.Render("↑/↓ move • 1–7 highlight • same key again or enter to open • q quit")
 }
 
-// layoutMenuListHeight is the list viewport height so header + list + footer fit the terminal
-// (footer pinned to the bottom via Place).
+// layoutMenuListHeight is the max number of menu entries visible at once (each entry is two rows).
 func (m *tasksInteractiveModel) layoutMenuListHeight(termH int) int {
 	headerH := lipgloss.Height(m.viewHeader())
 	helpH := lipgloss.Height(m.menuHelpLine())
 	gap := 2 // JoinVertical "" between header, list, and help
 	avail := termH - headerH - helpH - gap
-	if avail < 1 {
+	// Each menu entry is two lipgloss rows (title + description).
+	maxEntries := avail / 2
+	if maxEntries < 1 {
 		return 1
 	}
-	return avail
+	return maxEntries
 }
 
 func (m *tasksInteractiveModel) placeInTerminal(content string, vPos lipgloss.Position) string {
@@ -230,14 +218,10 @@ func (m *tasksInteractiveModel) placeInTerminal(content string, vPos lipgloss.Po
 }
 
 func (m *tasksInteractiveModel) menuEnter() (tea.Model, tea.Cmd) {
-	raw := m.list.SelectedItem()
-	if raw == nil {
+	if len(m.menuEntries) == 0 || m.menuIndex < 0 || m.menuIndex >= len(m.menuEntries) {
 		return m, nil
 	}
-	e, ok := raw.(menuEntry)
-	if !ok {
-		return m, nil
-	}
+	e := m.menuEntries[m.menuIndex]
 
 	switch e.tag {
 	case menuQuit:
@@ -247,10 +231,8 @@ func (m *tasksInteractiveModel) menuEnter() (tea.Model, tea.Cmd) {
 		m.phase = tuiPhaseInput
 		m.inputFor = menuNew
 		m.inputCtx = ""
-		m.input.SetValue("")
-		m.input.Placeholder = "optional name"
-		m.input.Focus()
-		return m, textinput.Blink
+		m.inputValue = ""
+		return m, nil
 
 	case menuListRunning:
 		m.inputFor = menuListRunning
@@ -268,28 +250,22 @@ func (m *tasksInteractiveModel) menuEnter() (tea.Model, tea.Cmd) {
 		m.phase = tuiPhaseInput
 		m.inputFor = menuStop
 		m.inputCtx = m.taskSelectionPrompt(false)
-		m.input.SetValue("")
-		m.input.Placeholder = "task ID"
-		m.input.Focus()
-		return m, textinput.Blink
+		m.inputValue = ""
+		return m, nil
 
 	case menuShow:
 		m.phase = tuiPhaseInput
 		m.inputFor = menuShow
 		m.inputCtx = m.taskSelectionPrompt(true)
-		m.input.SetValue("")
-		m.input.Placeholder = "task ID"
-		m.input.Focus()
-		return m, textinput.Blink
+		m.inputValue = ""
+		return m, nil
 
 	case menuTruncate:
 		m.phase = tuiPhaseInput
 		m.inputFor = menuTruncate
 		m.inputCtx = ""
-		m.input.SetValue("")
-		m.input.Placeholder = "type YES/Y/1 to confirm"
-		m.input.Focus()
-		return m, textinput.Blink
+		m.inputValue = ""
+		return m, nil
 	}
 
 	return m, nil
@@ -314,10 +290,10 @@ func (m *tasksInteractiveModel) submitInput() (tea.Model, tea.Cmd) {
 
 	switch m.inputFor {
 	case menuNew:
-		err = saveNewTask(m.db, strings.TrimSpace(m.input.Value()), &buf)
+		err = saveNewTask(m.db, strings.TrimSpace(m.inputValue), &buf)
 
 	case menuStop:
-		id, convErr := strconv.Atoi(strings.TrimSpace(m.input.Value()))
+		id, convErr := strconv.Atoi(strings.TrimSpace(m.inputValue))
 		if convErr != nil {
 			m.finishInputWithError("invalid task ID")
 			return m, nil
@@ -325,7 +301,7 @@ func (m *tasksInteractiveModel) submitInput() (tea.Model, tea.Cmd) {
 		err = stopTimer(m.db, id, &buf)
 
 	case menuShow:
-		id, convErr := strconv.Atoi(strings.TrimSpace(m.input.Value()))
+		id, convErr := strconv.Atoi(strings.TrimSpace(m.inputValue))
 		if convErr != nil {
 			m.finishInputWithError("invalid task ID")
 			return m, nil
@@ -336,7 +312,7 @@ func (m *tasksInteractiveModel) submitInput() (tea.Model, tea.Cmd) {
 		// var answer any = strings.ToLower(strings.TrimSpace(m.input.Value()))
 		// if answer == "yes" {
 		allowedString := []string{"yes","y","1"}
-		var answer string = m.input.Value()
+		var answer string = m.inputValue
 		if slices.Contains(allowedString, strings.ToLower(answer)) {
 			err = truncateAllTasks(m.db, &buf)
 		} else {
@@ -344,12 +320,10 @@ func (m *tasksInteractiveModel) submitInput() (tea.Model, tea.Cmd) {
 		}
 
 	default:
-		m.input.Blur()
 		m.phase = tuiPhaseMenu
 		return m, nil
 	}
 
-	m.input.Blur()
 	m.phase = tuiPhaseOutput
 	m.output = buf.String()
 	if err != nil {
@@ -361,7 +335,6 @@ func (m *tasksInteractiveModel) submitInput() (tea.Model, tea.Cmd) {
 }
 
 func (m *tasksInteractiveModel) finishInputWithError(msg string) {
-	m.input.Blur()
 	m.phase = tuiPhaseOutput
 	m.output = ""
 	m.errLine = msg
@@ -375,23 +348,19 @@ func (m *tasksInteractiveModel) returnFromError() {
 	case menuNew:
 		m.phase = tuiPhaseInput
 		m.inputCtx = ""
-		m.input.Placeholder = "optional name"
-		m.input.Focus()
+		m.inputValue = ""
 	case menuStop:
 		m.phase = tuiPhaseInput
 		m.inputCtx = m.taskSelectionPrompt(false)
-		m.input.Placeholder = "task ID"
-		m.input.Focus()
+		m.inputValue = ""
 	case menuShow:
 		m.phase = tuiPhaseInput
 		m.inputCtx = m.taskSelectionPrompt(true)
-		m.input.Placeholder = "task ID"
-		m.input.Focus()
+		m.inputValue = ""
 	case menuTruncate:
 		m.phase = tuiPhaseInput
 		m.inputCtx = ""
-		m.input.Placeholder = "type YES/Y/1 to confirm"
-		m.input.Focus()
+		m.inputValue = ""
 	default:
 		m.phase = tuiPhaseMenu
 	}
@@ -453,13 +422,18 @@ func (m *tasksInteractiveModel) taskSelectionPrompt(includeCompleted bool) strin
 	return b.String()
 }
 
-func (m *tasksInteractiveModel) View() string {
+func (m *tasksInteractiveModel) View() tea.View {
 	header := m.viewHeader()
+	wrap := func(content string) tea.View {
+		v := tea.NewView(content)
+		v.AltScreen = true
+		return v
+	}
 
 	switch m.phase {
 	case tuiPhaseMenu:
-		stack := lipgloss.JoinVertical(lipgloss.Left, header, "", m.list.View(), "", m.menuHelpLine())
-		return m.placeInTerminal(stack, lipgloss.Bottom)
+		stack := lipgloss.JoinVertical(lipgloss.Left, header, "", m.renderMenu(), "", m.menuHelpLine())
+		return wrap(m.placeInTerminal(stack, lipgloss.Top))
 
 	case tuiPhaseInput:
 		var prompt string
@@ -479,12 +453,12 @@ func (m *tasksInteractiveModel) View() string {
 			prompt,
 			m.inputCtx,
 			"",
-			m.input.View(),
+			m.renderInput(),
 			"",
 			tasksMuted.Render("<esc> cancel • <enter> submit"),
 		)
 		stack := lipgloss.JoinVertical(lipgloss.Left, header, "", body)
-		return m.placeInTerminal(stack, lipgloss.Top)
+		return wrap(m.placeInTerminal(stack, lipgloss.Top))
 
 	case tuiPhaseOutput:
 		var b strings.Builder
@@ -507,14 +481,83 @@ func (m *tasksInteractiveModel) View() string {
 			b.WriteString(tasksMuted.Render("any key to continue"))
 		}
 		stack := lipgloss.JoinVertical(lipgloss.Left, header, "", b.String())
-		return m.placeInTerminal(stack, lipgloss.Top)
+		return wrap(m.placeInTerminal(stack, lipgloss.Top))
 	}
 
-	return ""
+	return wrap("")
+}
+
+func (m *tasksInteractiveModel) renderMenu() string {
+	if len(m.menuEntries) == 0 {
+		return tasksMuted.Render("(no actions)")
+	}
+
+	selectedTitle := lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, false, true).
+		BorderForeground(lipgloss.Color("62")).Foreground(lipgloss.Color("86")).Bold(true).Padding(0, 0, 0, 1)
+	selectedDesc := selectedTitle.Copy().Foreground(lipgloss.Color("245")).Bold(false)
+	normalTitle := lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Padding(0, 0, 0, 2)
+	normalDesc := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Padding(0, 0, 0, 2)
+
+	maxRows := m.layoutMenuListHeight(m.height)
+	if maxRows > len(m.menuEntries) {
+		maxRows = len(m.menuEntries)
+	}
+	if maxRows < 1 {
+		maxRows = 1
+	}
+
+	start := 0
+	if m.menuIndex >= maxRows {
+		start = m.menuIndex - maxRows + 1
+	}
+	end := min(start+maxRows, len(m.menuEntries))
+
+	var rows []string
+	for i := start; i < end; i++ {
+		e := m.menuEntries[i]
+		if i == m.menuIndex {
+			rows = append(rows, selectedTitle.Render(e.title))
+			rows = append(rows, selectedDesc.Render(e.desc))
+		} else {
+			rows = append(rows, normalTitle.Render(e.title))
+			rows = append(rows, normalDesc.Render(e.desc))
+		}
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
+func (m *tasksInteractiveModel) inputPlaceholder() string {
+	switch m.inputFor {
+	case menuNew:
+		return "optional name"
+	case menuStop, menuShow:
+		return "task ID"
+	case menuTruncate:
+		return "type YES/Y/1 to confirm"
+	default:
+		return ""
+	}
+}
+
+func (m *tasksInteractiveModel) renderInput() string {
+	value := m.inputValue
+	if value == "" {
+		value = tasksMuted.Render(m.inputPlaceholder())
+	}
+	cursor := tasksAccent.Render("█")
+	return tasksBorder.Render(value + cursor)
+}
+
+func trimLastRune(s string) string {
+	if s == "" {
+		return ""
+	}
+	_, size := utf8.DecodeLastRuneInString(s)
+	return s[:len(s)-size]
 }
 
 func taskInteractiveLoop(db *sql.DB) error {
-	p := tea.NewProgram(newTasksInteractiveModel(db), tea.WithAltScreen())
+	p := tea.NewProgram(newTasksInteractiveModel(db))
 	_, err := p.Run()
 	return err
 }

@@ -21,9 +21,12 @@ import (
 	"github.com/spf13/viper"
 )
 
-const APP_VERSION string = "1.5"
+const APP_VERSION string = "1.6"
 
 var cfgFile string
+
+const DefaultConfigPath string = "$HOME/.config/barbtils/config.toml"
+
 var (
 	asciiArt      string
 	asciiOpts     string
@@ -65,6 +68,7 @@ Use this shit at your own risk lol.`,
 			LoggerSetLevelDebug()
 			Logger.Debug("Logger Set to Debug")
 		}
+		initConfig()
 		av, _ := cmd.Flags().GetBool("version")
 		if av {
 			Logger.Info("[CURRENT VERSION]", "barbtils", APP_VERSION)
@@ -73,7 +77,7 @@ Use this shit at your own risk lol.`,
 		if cmd.Parent() != nil {
 			return
 		}
-		streamC, _ := streamTextCmd.Flags().GetBool("serve");
+		streamC, _ := streamTextCmd.Flags().GetBool("serve")
 		interactive, _ := tasksCmd.Flags().GetBool("interactive")
 		if !interactive || !streamC {
 			go func() {
@@ -97,14 +101,13 @@ func Execute() {
 
 func init() {
 	cobra.OnInitialize(loggerInit)
-	cobra.OnInitialize(initConfig)
 	// cobra.OnInitialize(initDB)
 
 	// Here you will define your flags and configuration settings.
 	// Cobra supports persistent flags, which, if defined here,
 	// will be global for your application.
 
-	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", "$HOME/.config/barbtils/config.toml", "config file path")
+	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", DefaultConfigPath, "config file path")
 	RootCmd.PersistentFlags().BoolP("debug", "d", false, "Set Log level to debug")
 	RootCmd.PersistentFlags().BoolP("version", "v", false, "Print app version")
 
@@ -123,20 +126,19 @@ func init() {
 
 // initConfig reads in config file and ENV variables if set.
 func initConfig() {
-	if cfgFile != "" {
+	viper.AutomaticEnv() // read in environment variables that match
+	if cfgFile != DefaultConfigPath {
 		// Use config file from the flag.
 		viper.SetConfigFile(cfgFile)
-		//TODO
+		// TODO
 		Logger.Debug("Have to create something something that outputs the example json file.")
 	} else {
 		home, err := os.UserHomeDir()
 		cobra.CheckErr(err)
-		viper.SetConfigName("config")
 		viper.SetConfigType("toml")
-		viper.AddConfigPath(home + "/.config/barbtils")
+		viper.SetConfigName("config")
+		viper.AddConfigPath(home + "/.config/barbtils/.")
 	}
-
-	// viper.AutomaticEnv() // read in environment variables that match
 
 	// // If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err != nil {
@@ -144,7 +146,7 @@ func initConfig() {
 		Logger.Debugf("No config file found @ %s", viper.ConfigFileUsed())
 	} else {
 		Logger.Debug("[Config]", "Using config file @", viper.ConfigFileUsed())
-		//TODO - The message above does not show due to the lifecycle of the program. 
+		// TODO - The message above does not show due to the lifecycle of the program.
 		// Logger level starts at info, if the user start the program with the debug flag, it will initialize logger, run this function and only then set logger level, which is why this debug never runs
 	}
 }
@@ -152,7 +154,6 @@ func initConfig() {
 var availableFonts = []string{"3-d", "3x5", "5lineoblique", "acrobatic", "alligator", "alligator2", "alphabet", "avatar", "banner", "banner3-D", "banner3", "banner4", "barbwire", "basic", "bell", "big", "bigchief", "binary", "block", "bubble", "bulbhead", "calgphy2", "caligraphy", "catwalk", "chunky", "coinstak", "colossal", "computer", "contessa", "contrast", "cosmic", "cosmike", "cricket", "cursive", "cyberlarge", "cybermedium", "cybersmall", "diamond", "digital", "doh", "doom", "dotmatrix", "drpepper", "eftichess", "eftifont", "eftipiti", "eftirobot", "eftitalic", "eftiwall", "eftiwater", "epic", "fender", "fourtops", "fuzzy", "goofy", "gothic", "graffiti", "hollywood", "invita", "isometric1", "isometric2", "isometric3", "isometric4", "italic", "ivrit", "jazmine", "jerusalem", "katakana", "kban", "larry3d", "lcd", "lean", "letters", "linux", "lockergnome", "madrid", "marquee", "maxfour", "mike", "mini", "mirror", "mnemonic", "morse", "moscow", "nancyj-fancy", "nancyj-underlined", "nancyj", "nipples", "ntgreek", "o8", "ogre", "pawp", "peaks", "pebbles", "pepper", "poison", "puffy", "pyramid", "rectangles", "relief", "relief2", "rev", "roman", "rot13", "rounded", "rowancap", "rozzo", "runic", "runyc", "sblood", "script", "serifcap", "shadow", "short", "slant", "slide", "slscript", "small", "smisome1", "smkeyboard", "smscript", "smshadow", "smslant", "smtengwar", "speed", "stampatello", "standard", "starwars", "stellar", "stop", "straight", "tanja", "tengwar", "term", "thick", "thin", "threepoint", "ticks", "ticksslant", "tinker-toy", "tombstone", "trek", "tsalagi", "twopoint", "univers", "usaflag", "wavy", "weird"}
 
 func asciiArting(m string, font string) {
-
 	if m == "" {
 		Logger.Fatal("Can't proceed with Nil Chars")
 	}
