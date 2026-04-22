@@ -4,6 +4,7 @@ Copyright © 2026 Ahmed Babar
 package cmd
 
 import (
+	cmdHelper "barbtils/internal/cmdHelper"
 	l "barbtils/internal/logger"
 	"bufio"
 	"fmt"
@@ -22,9 +23,11 @@ import (
 	"github.com/spf13/viper"
 )
 
-const APP_VERSION string = "1.6"
+const APP_VERSION string = "1.7"
 
-const DefaultConfigPath string = "$HOME/.config/barbtils/config.toml"
+var DefaultConfigPath string = cmdHelper.OSHostName+"/.config/barbtils/config.toml"
+var DefaultStoragePath string = cmdHelper.OSHostName+"/.local/share/barbtils/"
+const DefaultStorageFileName string = "gitshit"
 
 var cfgFile string = DefaultConfigPath
 
@@ -67,7 +70,7 @@ Use this shit at your own risk lol.`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		debug, _ := cmd.Flags().GetBool("debug")
 		if debug {
-			LoggerSetLevelDebug()
+			l.LoggerSetLevelDebug()
 			l.Logger.Debug("Logger Set to Debug")
 		}
 		initConfig()

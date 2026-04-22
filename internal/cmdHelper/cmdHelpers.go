@@ -15,6 +15,16 @@ func GetCWD() string {
 	return dir
 }
 
+var OSHostName string = GetOsHome()
+
+func GetOsHome() string {
+	dir, err := os.UserHomeDir()
+	if err != nil {
+		l.Logger.Fatalf("Error trying to read CWD: %v", err)
+	}
+	return dir
+}
+
 
 func ParseFileLoc(path string, useHomeDir bool) (string) {
 	if useHomeDir {

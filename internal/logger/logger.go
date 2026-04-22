@@ -14,8 +14,8 @@ const SepLine string = "========================================================
 func LoggerInit() {
 	Logger = log.NewWithOptions(os.Stderr, log.Options{
 		// ReportCaller: true,
-		ReportTimestamp: true,
-		TimeFormat: "[03:04:05 PM]",
+		// ReportTimestamp: true,
+		// TimeFormat: "[03:04:05 PM]",
 	})
 	Logger.SetLevel(log.InfoLevel)
 	Logger.SetOutput(os.Stderr)
@@ -32,6 +32,10 @@ func LoggerInit() {
 	styles.Values["err"] = lipgloss.NewStyle().Bold(true)
 	
 	Logger.SetStyles(styles)
+}
+
+func LoggerSetLevelDebug() {
+	Logger.SetLevel(log.DebugLevel)
 }
 
 // Debug prints a debug message.
