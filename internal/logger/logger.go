@@ -9,6 +9,7 @@ import (
 )
 
 var Logger *log.Logger
+const SepLine string = "===========================================================\n"
 
 func LoggerInit() {
 	Logger = log.NewWithOptions(os.Stderr, log.Options{

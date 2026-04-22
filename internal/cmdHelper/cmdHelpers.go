@@ -35,6 +35,9 @@ func ExecCommand(progName string, fileLocation string, optionalArgs string) stri
 	fullCommand := fmt.Sprintf("%s %s %s", progName, fileLocation, optionalArgs)
 
 	cmd := exec.Command("sh", "-c", fullCommand)
+	
+	l.Logger.Debug("[Full Command]", "cmd", cmd)
+
 	stdoutStderr, err := cmd.CombinedOutput()
 	if err != nil {
 		l.Logger.Debugf("Error trying to exec command: %v", err)

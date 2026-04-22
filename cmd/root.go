@@ -24,9 +24,10 @@ import (
 
 const APP_VERSION string = "1.6"
 
-var cfgFile string
-
 const DefaultConfigPath string = "$HOME/.config/barbtils/config.toml"
+
+var cfgFile string = DefaultConfigPath
+
 
 var (
 	asciiArt      string

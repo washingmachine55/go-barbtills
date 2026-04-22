@@ -24,8 +24,6 @@ to quickly create a Cobra application.`,
 	},
 }
 
-const SepLine string = "===========================================================\n"
-
 func LoggerSetLevelDebug() {
 	l.Logger.SetLevel(log.DebugLevel)
 }
