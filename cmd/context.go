@@ -16,10 +16,12 @@ import (
 var ContextCmd = &cobra.Command{
 	Use:   "context",
 	Short: "Easy Context switching",
-	Long: `I know my ADHD is deliberatly fucking my shit up, so here i am,   
+	Long: `I know my ADHD is deliberatly messing things up, so here i am,   
 hyperfocusing to create this command so that perhaps this...might help me
 
-LMFAO I SURE HOPE IT DOES LOL`,
+I SURE HOPE IT DOES LOL
+Note: This Command is a WIP, its subcommand git is more functional
+`,
 	Run: func(cmd *cobra.Command, args []string) {
 		if cmd.Flag("new").Value.String() == "true" {
 			context.GatherDetails()

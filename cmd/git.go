@@ -16,13 +16,12 @@ import (
 // gitCmd represents the git command
 var gitCmd = &cobra.Command{
 	Use:   "git",
-	Short: "A brief description of your command",
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
+	Short: "Get context on your locally saved git repos",
+	Long: `You can use this command to save git repo direcotires to a file and then
+run commands on them. For example:
 
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
+"barbtils context git -s" would run git status on all of the git repos that you save using:
+"barbtils context git --collect $HOME/example-git-repo/"`,
 	Run: func(cmd *cobra.Command, args []string) {
 		if create, err := cmd.Flags().GetString("create"); err == nil && create != "" {
 			l.Info(string(ReadOrCreateStorageFile(create)))

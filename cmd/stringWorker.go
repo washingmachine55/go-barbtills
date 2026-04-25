@@ -15,9 +15,8 @@ import (
 var stringWorker = &cobra.Command{
 	Use:   "bst",
 	Short: "Bulk String Time Handler",
-	Long: 
-		`Handles time calculation from a bulk of string. 
-		Essentially takes in raw, or formatted input to calculate time as an output.`,
+	Long: `Handles time calculation from a bulk of string.
+Essentially takes in raw, or formatted input to calculate time as an output.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		pretty, _ := cmd.Flags().GetBool("pretty")
 		if message != "" && webshit == false {

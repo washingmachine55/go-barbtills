@@ -66,6 +66,7 @@ var tasksCmd = &cobra.Command{
 	Use:   "tasks",
 	Short: "Task timer tracker",
 	Long: `Task timer tracker — create tasks with running timers, stop them, and view elapsed time.
+Uses PostgreSQL as the database (DB Requires Manual setup, including schema creation.)
 
 Examples:
   barbtils tasks -i                    Full-screen TUI (arrow keys + enter)

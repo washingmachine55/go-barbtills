@@ -6,12 +6,9 @@ package cmd
 import (
 	cmdHelper "barbtils/internal/cmdHelper"
 	l "barbtils/internal/logger"
-	"bufio"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -23,7 +20,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-const APP_VERSION string = "1.7"
+const APP_VERSION string = "1.8"
 
 var DefaultConfigPath string = cmdHelper.OSHostName+"/.config/barbtils/config.toml"
 var DefaultStoragePath string = cmdHelper.OSHostName+"/.local/share/barbtils/"
@@ -42,31 +39,10 @@ var (
 var RootCmd = &cobra.Command{
 	Use:   "barbtils",
 	Short: "My utils that I sorta need on a usual basis",
-	Long: `I am retarded, and my unconventional ways require me to make shit like this
+	Long: `I am a little weird, and my unconventional ways require me to make things like this
 so that I can stay alive as a functional human being.
 		
-Use this shit at your own risk lol.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		if asciiArt != "" && asciiArt != "-" {
-			l.Logger.Debugf("Used Opts: %s", asciiOpts)
-			asciiArting(asciiArt, asciiOpts)
-			// l.Logger.Warnf("Output: %s", m)
-		}
-		if asciiOptsHelp != false {
-			l.Logger.Info("Available options are: ")
-			printFontTable()
-		}
-		val := asciiArt
-		if val == "-" {
-			// Read from Stdin
-			reader := bufio.NewReader(os.Stdin)
-			content, _ := io.ReadAll(reader)
-			val = string(content)
-			l.Logger.Debug(os.Stderr, "DEBUG: raw input received: %q\n", val)
-			// Process 'val'
-			asciiArting(strings.TrimSpace(val), asciiOpts)
-		}
-	},
+Use this at your own risk lol.`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		debug, _ := cmd.Flags().GetBool("debug")
 		if debug {
@@ -113,20 +89,12 @@ func init() {
 	// will be global for your application.
 
 	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", DefaultConfigPath, "config file path")
-	RootCmd.PersistentFlags().BoolP("debug", "d", false, "Set Log level to debug")
+	RootCmd.PersistentFlags().BoolP("debug", "d", false, "Set Log level to debug. Can be used with any command and subcommands")
 	RootCmd.PersistentFlags().BoolP("version", "v", false, "Print app version")
-
-	RootCmd.Flags().StringVar(&asciiArt, "ass", "", "ASCII art YEEEETTT. (use '-' for stdin)")
-	RootCmd.Flags().StringVarP(&asciiOpts, "opts", "o", "slant", "Options for ASCII art")
-	RootCmd.Flags().BoolVar(&asciiOptsHelp, "opts-help", false, "Prints all available options for ASCII art fonts")
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
 	// RootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
-
-	RootCmd.RegisterFlagCompletionFunc("opts", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		return availableFonts, cobra.ShellCompDirectiveNoFileComp
-	})
 }
 
 // initConfig reads in config file and ENV variables if set.
@@ -183,8 +151,8 @@ func printFontTable() {
 	// minwidth, tabwidth, padding, padchar, flags
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
 
-	fmt.Println("AVAILABLE FONTS:")
-	fmt.Println("----------------")
+	// fmt.Println("AVAILABLE FONTS:")
+	fmt.Println("-----------------------------------------------------------")
 
 	columns := 4 // You can increase this for wider terminals
 	for i, font := range availableFonts {
