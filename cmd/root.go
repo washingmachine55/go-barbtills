@@ -20,7 +20,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-const APP_VERSION string = "1.8"
+const APP_VERSION string = "1.81.20260427"
 
 var DefaultConfigPath string = cmdHelper.OSHostName+"/.config/barbtils/config.toml"
 var DefaultStoragePath string = cmdHelper.OSHostName+"/.local/share/barbtils/"
@@ -43,6 +43,18 @@ var RootCmd = &cobra.Command{
 so that I can stay alive as a functional human being.
 		
 Use this at your own risk lol.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		av, err := cmd.Flags().GetBool("version")
+		if err != nil {
+			l.Logger.Fatal(err)
+		}
+		if av  {
+			l.Logger.Info("[CURRENT VERSION]", "barbtils", APP_VERSION)
+			if cmd.Flags().GetBool("debug"); err == nil {
+				l.Logger.Debug("[GH REPO]", "link", "https://github.com/washingmachine55/go-barbtills")
+			}
+		}
+	},
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		debug, _ := cmd.Flags().GetBool("debug")
 		if debug {
@@ -50,10 +62,6 @@ Use this at your own risk lol.`,
 			l.Logger.Debug("Logger Set to Debug")
 		}
 		initConfig()
-		av, _ := cmd.Flags().GetBool("version")
-		if av {
-			l.Logger.Info("[CURRENT VERSION]", "barbtils", APP_VERSION)
-		}
 		// Only the root command (no subcommand) inherits this timeout; avoids killing `tasks` and others.
 		if cmd.Parent() != nil {
 			return
