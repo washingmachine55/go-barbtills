@@ -79,6 +79,13 @@ func runGitStatus() {
 }
 
 func WriteGitShit(filePath string) {
+	l.Debug("Given File path", filePath)
+	checkTrailingSlash := strings.HasSuffix(filePath, "/")
+	if !checkTrailingSlash {
+		filePath = filePath + "/"
+		l.Debug("Edited file path", filePath)
+	}
+
 	dirs, err := os.ReadDir(filePath)
 	if err != nil {
 		l.Error("Error while reading given dir", "Error", err)
