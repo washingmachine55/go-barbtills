@@ -6,10 +6,14 @@ package cmd
 import (
 	l "barbtils/internal/logger"
 	"bufio"
+	"fmt"
 	"io"
 	"os"
 	"strings"
+	"text/tabwriter"
 
+	"github.com/common-nighthawk/go-figure"
+	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
 
@@ -58,4 +62,50 @@ func init() {
 	asciiCmd.RegisterFlagCompletionFunc("opts", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		return availableFonts, cobra.ShellCompDirectiveNoFileComp
 	})
+}
+
+func asciiArting(m string, font string) {
+	if m == "" {
+		l.Logger.Fatal("Can't proceed with Nil Chars")
+	}
+
+	fontSet := make(map[string]struct{}) // Use an empty struct{} for memory efficiency
+
+	for _, availableFont := range availableFonts {
+		fontSet[availableFont] = struct{}{}
+	}
+
+	// Check for presence using the map
+	_, found := fontSet[font]
+	if found == false {
+		l.Logger.Fatalf("Selected font '%s' is not available in the Font List", font)
+	}
+	myFigure := figure.NewFigure(m, font, true)
+	wolu := myFigure.ColorString()
+	color.RGB(255, 128, 0).Printf("%s", wolu)
+}
+
+func printFontTable() {
+	// minwidth, tabwidth, padding, padchar, flags
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+
+	// fmt.Println("AVAILABLE FONTS:")
+	fmt.Println("-----------------------------------------------------------")
+
+	columns := 4 // You can increase this for wider terminals
+	for i, font := range availableFonts {
+		fmt.Fprintf(w, "%s\t", font)
+
+		// Start a new line after every N columns
+		if (i+1)%columns == 0 {
+			fmt.Fprintln(w)
+		}
+	}
+
+	// Print a final newline if the loop didn't end exactly on a column break
+	if len(availableFonts)%columns != 0 {
+		fmt.Fprintln(w)
+	}
+
+	w.Flush()
 }

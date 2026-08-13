@@ -1,8 +1,14 @@
 version: "2"
+
+servers:
+    - engine: postgresql
+      uri: "postgresql://postgres@localhost:5432/timesheet_helper?sslmode=disable"
 sql:
     - engine: "postgresql"
-      schema: "supabase/migrations"
-      queries: "supabase/queries/query.sql"
+      schema: "database/migrations"
+      queries: "database/queries/query.sql"
+      database:
+          managed: true
       gen:
           go:
               package: "database"
