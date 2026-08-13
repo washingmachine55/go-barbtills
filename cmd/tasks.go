@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"barbtils/internal/database"
+	"context"
 	"database/sql"
 	"fmt"
 	"io"
@@ -26,13 +28,6 @@ var (
 	tasksMuted  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	tasksBorder = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62")).Padding(0, 1)
 )
-
-type Task struct {
-	ID        int
-	TaskName  sql.NullString
-	StartTime time.Time
-	EndTime   sql.NullTime
-}
 
 func openTasksDB() (*sql.DB, error) {
 	dbURL := viper.GetString("DB_URL")
@@ -132,7 +127,7 @@ Examples:
 			return showSpecificTimer(db, flagShowTask, nil)
 		}
 
-		allowedString := []string{"yes","y","1"}
+		allowedString := []string{"yes", "y", "1"}
 		if flagTruncateTable != "" {
 			flagTruncateTable = strings.ToLower(flagTruncateTable)
 			if slices.Contains(allowedString, flagTruncateTable) {
@@ -160,45 +155,45 @@ func taskWriter(w io.Writer) io.Writer {
 }
 
 func saveNewTask(db *sql.DB, name string, w io.Writer) error {
+	ctx := context.Background()
+	sqlQ := database.New(db)
 	w = taskWriter(w)
 	now := time.Now()
 
-	var nameArg interface{}
-	if name != "" {
-		nameArg = name
+	if name == "" {
+		return fmt.Errorf("Task name must not be empty!")
 	}
 
-	row := db.QueryRow(
-		`INSERT INTO tasks (task_name, start_time) VALUES ($1, $2) RETURNING id, task_name, start_time`,
-		nameArg, now,
-	)
-
-	var t Task
-	if err := row.Scan(&t.ID, &t.TaskName, &t.StartTime); err != nil {
+	t, err := sqlQ.CreateNewTask(ctx, database.CreateNewTaskParams{TaskName: name, StartTime: now})
+	if err != nil {
 		return fmt.Errorf("insert failed: %w", err)
 	}
 
-	fmt.Fprintln(w, tasksOK.Render("Created task #"+strconv.Itoa(t.ID))+" "+tasksMuted.Render(nullStrDisplay(t.TaskName)))
+	fmt.Fprintln(w, tasksOK.Render("Created task #"+strconv.Itoa(int(t.ID)))+" "+tasksMuted.Render(t.TaskName))
 	fmt.Fprintln(w, formatTaskBlock(t))
 	return nil
 }
 
 func savedEditedTask(db *sql.DB, taskID int, endTime time.Time, w io.Writer) error {
+	ctx := context.Background()
+	sqlQ := database.New(db)
 	w = taskWriter(w)
-	row := db.QueryRow(
-		`UPDATE tasks SET end_time = $1 WHERE id = $2 AND end_time IS null RETURNING id, task_name, start_time, end_time`,
-		endTime, taskID,
-	)
 
-	var t Task
-	if err := row.Scan(&t.ID, &t.TaskName, &t.StartTime, &t.EndTime); err != nil {
+	t, err := sqlQ.UpdateSelectedTask(ctx, database.UpdateSelectedTaskParams{
+		ID: int32(taskID),
+		EndTime: sql.NullTime{
+			Time:  endTime,
+			Valid: true,
+		},
+	})
+	if err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("no running task found with ID %d", taskID)
 		}
 		return fmt.Errorf("update failed: %w", err)
 	}
 
-	fmt.Fprintln(w, tasksOK.Render("Stopped task #"+strconv.Itoa(t.ID)))
+	fmt.Fprintln(w, tasksOK.Render("Stopped task #"+strconv.Itoa(int(t.ID))))
 	fmt.Fprintln(w, formatTaskBlock(t))
 
 	diff := t.EndTime.Time.Sub(t.StartTime)
@@ -222,33 +217,28 @@ func truncateAllTasks(db *sql.DB, w io.Writer) error {
 }
 
 func getAllRunningTimers(db *sql.DB, isCompleted bool, w io.Writer) error {
+	ctx := context.Background()
+	sqlQ := database.New(db)
 	w = taskWriter(w)
-	var query string
 	var title string
 	if isCompleted {
-		query = `SELECT id, task_name, start_time, end_time FROM tasks WHERE end_time IS NOT NULL ORDER BY id`
 		title = "Completed tasks"
 	} else {
-		query = `SELECT id, task_name, start_time, end_time FROM tasks WHERE end_time IS NULL ORDER BY id`
 		title = "Running tasks"
 	}
 
-	rows, err := db.Query(query)
-	if err != nil {
-		return fmt.Errorf("query failed: %w", err)
-	}
-	defer rows.Close()
-
-	var tasks []Task
-	for rows.Next() {
-		var task Task
-		if err := rows.Scan(&task.ID, &task.TaskName, &task.StartTime, &task.EndTime); err != nil {
-			return err
+	var tasks []database.Task
+	if ct, err := sqlQ.CompletedTasks(ctx); isCompleted {
+		if err != nil {
+			return fmt.Errorf("Error fetching running tasks: %v", err)
 		}
-		tasks = append(tasks, task)
-	}
-	if err := rows.Err(); err != nil {
-		return err
+		tasks = ct
+	} else {
+		rt, err := sqlQ.RunningTasks(ctx)
+		if err != nil {
+			return fmt.Errorf("Error fetching running tasks: %v", err)
+		}
+		tasks = rt
 	}
 
 	fmt.Fprintln(w, tasksAccent.Render(title))
@@ -261,39 +251,39 @@ func getAllRunningTimers(db *sql.DB, isCompleted bool, w io.Writer) error {
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "ID\tTASK\tSTART TIME\tEND TIME\tTOTAL TASK TIME")
 		for _, r := range tasks {
-			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", r.ID, r.TaskName.String, r.StartTime.Format("03:04:05 PM"), r.EndTime.Time.Format("03:04:05 PM"), tasksAccent.Render(getHumanReadabletimeDiff(r, w, false)))
+			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", r.ID, r.TaskName, r.StartTime.Format("03:04:05 PM"), r.EndTime.Time.Format("03:04:05 PM"), tasksAccent.Render(getHumanReadableTimeDiff(r, w, false)))
 		}
 		return tw.Flush()
 	} else {
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "ID\tTASK\tSTART TIME\tElapsed Time")
 		for _, r := range tasks {
-			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\n", r.ID, r.TaskName.String, r.StartTime.Format("03:04:05 PM"), tasksAccent.Render(getHumanReadabletimeDiff(r, w, false)))
+			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\n", r.ID, r.TaskName, r.StartTime.Format("03:04:05 PM"), tasksAccent.Render(getHumanReadableTimeDiff(r, w, false)))
 		}
 		return tw.Flush()
 	}
 }
 
 func showSpecificTimer(db *sql.DB, id int, w io.Writer) error {
+	ctx := context.Background()
+	sqlQ := database.New(db)
 	w = taskWriter(w)
-	row := db.QueryRow(`SELECT id, task_name, start_time, end_time FROM tasks WHERE id = $1`, id)
-
-	var t Task
-	if err := row.Scan(&t.ID, &t.TaskName, &t.StartTime, &t.EndTime); err != nil {
+	t, err := sqlQ.ShowSpecificTimer(ctx, int32(id))
+	if err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("no task found with ID %d", id)
 		}
 		return fmt.Errorf("query failed: %w", err)
 	}
 
-	fmt.Fprintln(w, tasksAccent.Render("Task #"+strconv.Itoa(t.ID)))
+	fmt.Fprintln(w, tasksAccent.Render("Task #"+strconv.Itoa(int(t.ID))))
 	fmt.Fprintln(w, formatTaskBlock(t))
 
-	fmt.Fprintln(w, tasksWarn.Render("Elapsed ")+tasksAccent.Render(getHumanReadabletimeDiff(t, w, true)))
+	fmt.Fprintln(w, tasksWarn.Render("Elapsed ")+tasksAccent.Render(getHumanReadableTimeDiff(t, w, true)))
 	return nil
 }
 
-func getHumanReadabletimeDiff(t Task, w io.Writer, status bool) string {
+func getHumanReadableTimeDiff(t database.Task, w io.Writer, status bool) string {
 	var diff time.Duration
 	if !t.EndTime.Valid {
 		// diff = time.Now().In(time.Local).Sub(t.StartTime)
@@ -337,14 +327,7 @@ func fmtDuration(d time.Duration) string {
 	return strings.Join(parts, ", ")
 }
 
-func nullStrDisplay(n sql.NullString) string {
-	if n.Valid {
-		return n.String
-	}
-	return "—"
-}
-
-func formatTaskBlock(t Task) string {
+func formatTaskBlock(t database.Task) string {
 	end := "—"
 	if t.EndTime.Valid {
 		end = t.EndTime.Time.Format(time.RFC3339)
@@ -353,8 +336,8 @@ func formatTaskBlock(t Task) string {
 		tasksMuted.Render("Start: ") + t.StartTime.Format(time.RFC3339),
 		tasksMuted.Render("End:   ") + end,
 	}
-	if t.TaskName.Valid && t.TaskName.String != "" {
-		lines = append([]string{tasksMuted.Render("Name:  ") + t.TaskName.String}, lines...)
+	if t.TaskName != "" {
+		lines = append([]string{tasksMuted.Render("Name:  ") + t.TaskName}, lines...)
 	}
 	return strings.Join(lines, "\n")
 }

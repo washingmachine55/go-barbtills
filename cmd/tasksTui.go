@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"fmt"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
@@ -43,6 +45,8 @@ func (e menuEntry) Title() string       { return e.title }
 func (e menuEntry) Description() string { return e.desc }
 func (e menuEntry) FilterValue() string { return e.title }
 
+type textInput = textinput.Model
+
 type tasksInteractiveModel struct {
 	db          *sql.DB
 	phase       tuiPhase
@@ -50,14 +54,17 @@ type tasksInteractiveModel struct {
 	menuIndex   int
 	inputFor    menuTag
 	inputCtx    string
-	inputValue  string
+	inputValue  textInput
+	cursor      tea.Cursor
 	output      string
 	errLine     string
 	width       int
 	height      int
+	ctx         context.Context
 }
 
 func newTasksInteractiveModel(db *sql.DB) *tasksInteractiveModel {
+	ctx := context.Background()
 	menuDefs := []struct {
 		title, desc string
 		tag         menuTag
@@ -83,6 +90,7 @@ func newTasksInteractiveModel(db *sql.DB) *tasksInteractiveModel {
 		db:          db,
 		phase:       tuiPhaseMenu,
 		menuEntries: items,
+		ctx:         ctx,
 	}
 }
 
@@ -119,6 +127,8 @@ func (m *tasksInteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tuiPhaseInput:
+		var cmd tea.Cmd
+		m.inputValue, cmd = m.inputValue.Update(msg)
 		kp, ok := msg.(tea.KeyPressMsg)
 		if !ok {
 			return m, nil
@@ -129,25 +139,28 @@ func (m *tasksInteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			return m.submitInput()
+		case "ctrl+u":
+			m.inputValue.Prompt = ""
+			return m, nil
 		case "backspace", "ctrl+h":
-			m.inputValue = trimLastRune(m.inputValue)
+			m.inputValue.Prompt = trimLastRune(m.inputValue.Prompt)
 			return m, nil
 		}
 
 		// Use Key.Text so space and other printables work; String() reports "space", not " ".
 		k := kp.Key()
 		if k.Text != "" {
-			if len(m.inputValue)+len(k.Text) <= 512 {
-				m.inputValue += k.Text
+			if len(m.inputValue.Prompt)+len(k.Text) <= 512 {
+				m.inputValue.Prompt += k.Text
 			}
 			return m, nil
 		}
-		return m, nil
+		return m, cmd
 
 	case tuiPhaseMenu:
 		if km, ok := msg.(tea.KeyMsg); ok {
 			switch km.String() {
-			case "ctrl+c", "q":
+			case "ctrl+c", "q", "esc":
 				return m, tea.Quit
 			case "enter":
 				return m.menuEnter()
@@ -231,7 +244,7 @@ func (m *tasksInteractiveModel) menuEnter() (tea.Model, tea.Cmd) {
 		m.phase = tuiPhaseInput
 		m.inputFor = menuNew
 		m.inputCtx = ""
-		m.inputValue = ""
+		m.inputValue.Prompt = ""
 		return m, nil
 
 	case menuListRunning:
@@ -250,21 +263,21 @@ func (m *tasksInteractiveModel) menuEnter() (tea.Model, tea.Cmd) {
 		m.phase = tuiPhaseInput
 		m.inputFor = menuStop
 		m.inputCtx = m.taskSelectionPrompt(false)
-		m.inputValue = ""
+		m.inputValue.Prompt = ""
 		return m, nil
 
 	case menuShow:
 		m.phase = tuiPhaseInput
 		m.inputFor = menuShow
 		m.inputCtx = m.taskSelectionPrompt(true)
-		m.inputValue = ""
+		m.inputValue.Prompt = ""
 		return m, nil
 
 	case menuTruncate:
 		m.phase = tuiPhaseInput
 		m.inputFor = menuTruncate
 		m.inputCtx = ""
-		m.inputValue = ""
+		m.inputValue.Prompt = ""
 		return m, nil
 	}
 
@@ -290,10 +303,10 @@ func (m *tasksInteractiveModel) submitInput() (tea.Model, tea.Cmd) {
 
 	switch m.inputFor {
 	case menuNew:
-		err = saveNewTask(m.db, strings.TrimSpace(m.inputValue), &buf)
+		err = saveNewTask(m.db, strings.TrimSpace(m.inputValue.Prompt), &buf)
 
 	case menuStop:
-		id, convErr := strconv.Atoi(strings.TrimSpace(m.inputValue))
+		id, convErr := strconv.Atoi(strings.TrimSpace(m.inputValue.Prompt))
 		if convErr != nil {
 			m.finishInputWithError("invalid task ID")
 			return m, nil
@@ -301,7 +314,7 @@ func (m *tasksInteractiveModel) submitInput() (tea.Model, tea.Cmd) {
 		err = stopTimer(m.db, id, &buf)
 
 	case menuShow:
-		id, convErr := strconv.Atoi(strings.TrimSpace(m.inputValue))
+		id, convErr := strconv.Atoi(strings.TrimSpace(m.inputValue.Prompt))
 		if convErr != nil {
 			m.finishInputWithError("invalid task ID")
 			return m, nil
@@ -311,8 +324,8 @@ func (m *tasksInteractiveModel) submitInput() (tea.Model, tea.Cmd) {
 	case menuTruncate:
 		// var answer any = strings.ToLower(strings.TrimSpace(m.input.Value()))
 		// if answer == "yes" {
-		allowedString := []string{"yes","y","1"}
-		var answer string = m.inputValue
+		allowedString := []string{"yes", "y", "1"}
+		var answer string = m.inputValue.Prompt
 		if slices.Contains(allowedString, strings.ToLower(answer)) {
 			err = truncateAllTasks(m.db, &buf)
 		} else {
@@ -348,19 +361,19 @@ func (m *tasksInteractiveModel) returnFromError() {
 	case menuNew:
 		m.phase = tuiPhaseInput
 		m.inputCtx = ""
-		m.inputValue = ""
+		m.inputValue.Prompt = ""
 	case menuStop:
 		m.phase = tuiPhaseInput
 		m.inputCtx = m.taskSelectionPrompt(false)
-		m.inputValue = ""
+		m.inputValue.Prompt = ""
 	case menuShow:
 		m.phase = tuiPhaseInput
 		m.inputCtx = m.taskSelectionPrompt(true)
-		m.inputValue = ""
+		m.inputValue.Prompt = ""
 	case menuTruncate:
 		m.phase = tuiPhaseInput
 		m.inputCtx = ""
-		m.inputValue = ""
+		m.inputValue.Prompt = ""
 	default:
 		m.phase = tuiPhaseMenu
 	}
@@ -540,7 +553,7 @@ func (m *tasksInteractiveModel) inputPlaceholder() string {
 }
 
 func (m *tasksInteractiveModel) renderInput() string {
-	value := m.inputValue
+	value := m.inputValue.Prompt
 	if value == "" {
 		value = tasksMuted.Render(m.inputPlaceholder())
 	}

@@ -1,0 +1,10 @@
+-- +goose Up
+CREATE TABLE IF NOT EXISTS tasks (
+	id SERIAL PRIMARY KEY,
+	task_name TEXT NOT NULL,
+	start_time TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	end_time TIMESTAMP WITH TIME ZONE DEFAULT NULL
+);
+
+-- +goose Down
+DROP TABLE tasks;
