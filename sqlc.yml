@@ -6,7 +6,7 @@ servers:
 sql:
     - engine: "postgresql"
       schema: "database/migrations"
-      queries: "database/queries/query.sql"
+      queries: "database/queries/stable"
       database:
           managed: true
       gen:
