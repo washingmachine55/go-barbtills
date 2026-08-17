@@ -25,19 +25,18 @@ WHERE t.id = $1
 GROUP BY t.id, t.name, t.is_paused;
 
 -- name: CreateNewTask :one
-INSERT INTO tasks (name, priority, category, type, tags) VALUES ($1,$2,$3,$4,$5) RETURNING *;
+INSERT INTO tasks (name, priority, category, type, tags) VALUES ($1, $2, $3, $4, $5) RETURNING *;
 
 -- name: StartTaskSession :one
-INSERT INTO tasks_sessions (task_id, start_time) VALUES ($1, $2)
-RETURNING id, task_id, start_time, end_time;
+INSERT INTO tasks_sessions (task_id, start_time) VALUES ($1, $2) RETURNING *;
 
 -- name: UpdateSelectedTask :one
 UPDATE tasks_sessions SET end_time = now()
-WHERE task_id = $2 AND end_time IS NULL
+WHERE task_id = $1 AND end_time IS NULL
 RETURNING id, task_id, start_time, end_time;
 
 -- name: TruncateTasks :exec
-BEGIN
+-- BEGIN
 TRUNCATE TABLE tasks RESTART IDENTITY CASCADE;
 TRUNCATE TABLE tasks_sessions RESTART IDENTITY CASCADE;
-END;
+-- END;
