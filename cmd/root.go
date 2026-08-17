@@ -58,6 +58,13 @@ Use this at your own risk lol.`,
 		if getDbUri {
 			getDbURL()
 		}
+		getRagDbUri, err := cmd.Flags().GetBool("get_rag_db_uri")
+		if err != nil {
+			l.Logger.Fatal(err)
+		}
+		if getRagDbUri {
+			getRagDbURL()
+		}
 	},
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		debug, _ := cmd.Flags().GetBool("debug")
@@ -108,6 +115,7 @@ func init() {
 	// when this action is called directly.
 	// RootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 	RootCmd.PersistentFlags().Bool("get_db_uri", false, "Prints initialized DB URI to stdout")
+	RootCmd.PersistentFlags().Bool("get_rag_db_uri", false, "Prints initialized RAG DB URI to stdout")
 }
 
 // initConfig reads in config file and ENV variables if set.
@@ -144,6 +152,15 @@ func getDbURL() {
 	dbURL := viper.GetString("DB_URL")
 	if dbURL == "" {
 		l.Logger.Fatal("DB_URL is not configured — set it in your barbtils.toml or environment")
+	}
+	fmt.Printf("%v", dbURL)
+}
+
+func getRagDbURL() {
+	initConfig()
+	dbURL := viper.GetString("RAG_DB_URL")
+	if dbURL == "" {
+		l.Logger.Fatal("RAG_DB_URL is not configured — set it in your barbtils.toml or environment")
 	}
 	fmt.Printf("%v", dbURL)
 }

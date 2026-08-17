@@ -4,8 +4,9 @@ servers:
     - engine: postgresql
       uri: "postgresql://postgres@localhost:5432/timesheet_helper?sslmode=disable"
 sql:
-    - engine: "postgresql"
-      schema: "database/migrations"
+    - name: "standard"
+      engine: "postgresql"
+      schema: "database/migrations/standard"
       queries: "database/queries/stable"
       database:
           managed: true
@@ -13,4 +14,14 @@ sql:
           go:
               package: "database"
               out: "internal/database"
+              sql_package: "database/sql"
+    - name: "rag"
+      engine: "postgresql"
+      schema: "database/migrations/rag"
+      database:
+          managed: true
+      gen:
+          go:
+              package: "database"
+              out: "internal/rag"
               sql_package: "database/sql"
