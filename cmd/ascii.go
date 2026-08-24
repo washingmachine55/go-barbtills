@@ -45,7 +45,7 @@ var asciiCmd = &cobra.Command{
 }
 
 func init() {
-	RootCmd.AddCommand(asciiCmd)
+	rootCmd.AddCommand(asciiCmd)
 	asciiCmd.Flags().StringVar(&asciiArt, "message", "", "String to convert to ASCII Art (use '-' for stdin if piping into this)")
 	asciiCmd.Flags().StringVarP(&asciiOpts, "opts", "o", "slant", "Font Option to use for ASCII art generation")
 	asciiCmd.Flags().BoolVar(&asciiOptsHelp, "opts-help", false, "Prints all available options for ASCII art fonts")

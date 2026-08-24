@@ -32,8 +32,8 @@ var (
 	asciiOptsHelp bool
 )
 
-// RootCmd represents the base command when called without any subcommands
-var RootCmd = &cobra.Command{
+// rootCmd represents the base command when called without any subcommands
+var rootCmd = &cobra.Command{
 	Use:   "barbtils",
 	Short: "My utils that I sorta need on a usual basis",
 	Long: `I am a little weird, and my unconventional ways require me to make things like this
@@ -63,7 +63,7 @@ Use this at your own risk lol.`,
 			l.Logger.Fatal(err)
 		}
 		if getRagDbUri {
-			getRagDbURL()
+			fmt.Printf("%v", GetRagDbURL())
 		}
 	},
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
@@ -92,7 +92,7 @@ Use this at your own risk lol.`,
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
-	err := RootCmd.Execute()
+	err := rootCmd.Execute()
 	signal.Ignore(syscall.SIGPIPE)
 	if err != nil {
 		os.Exit(1)
@@ -107,15 +107,15 @@ func init() {
 	// Cobra supports persistent flags, which, if defined here,
 	// will be global for your application.
 
-	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", DefaultConfigPath, "config file path")
-	RootCmd.PersistentFlags().BoolP("debug", "d", false, "Set Log level to debug. Can be used with any command and subcommands")
-	RootCmd.PersistentFlags().BoolP("version", "v", false, "Print app version")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", DefaultConfigPath, "config file path")
+	rootCmd.PersistentFlags().BoolP("debug", "d", false, "Set Log level to debug. Can be used with any command and subcommands")
+	rootCmd.PersistentFlags().BoolP("version", "v", false, "Print app version")
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
 	// RootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
-	RootCmd.PersistentFlags().Bool("get_db_uri", false, "Prints initialized DB URI to stdout")
-	RootCmd.PersistentFlags().Bool("get_rag_db_uri", false, "Prints initialized RAG DB URI to stdout")
+	rootCmd.PersistentFlags().Bool("get_db_uri", false, "Prints initialized DB URI to stdout")
+	rootCmd.PersistentFlags().Bool("get_rag_db_uri", false, "Prints initialized RAG DB URI to stdout")
 }
 
 // initConfig reads in config file and ENV variables if set.
@@ -152,15 +152,6 @@ func getDbURL() {
 	dbURL := viper.GetString("DB_URL")
 	if dbURL == "" {
 		l.Logger.Fatal("DB_URL is not configured — set it in your barbtils.toml or environment")
-	}
-	fmt.Printf("%v", dbURL)
-}
-
-func getRagDbURL() {
-	initConfig()
-	dbURL := viper.GetString("RAG_DB_URL")
-	if dbURL == "" {
-		l.Logger.Fatal("RAG_DB_URL is not configured — set it in your barbtils.toml or environment")
 	}
 	fmt.Printf("%v", dbURL)
 }

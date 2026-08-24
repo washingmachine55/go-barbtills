@@ -16,7 +16,7 @@ import (
 var ContextCmd = &cobra.Command{
 	Use:   "context",
 	Short: "Easy Context switching",
-	Long: `I know my ADHD is deliberatly messing things up, so here i am,   
+	Long: `I know my ADHD is deliberatly messing things up, so here i am,
 hyperfocusing to create this command so that perhaps this...might help me
 
 I SURE HOPE IT DOES LOL
@@ -35,10 +35,10 @@ Note: This Command is a WIP, its subcommand git is more functional
 	},
 }
 
-var command []string;
+var command []string
 
 func init() {
-	RootCmd.AddCommand(ContextCmd)
+	rootCmd.AddCommand(ContextCmd)
 
 	// Here you will define your flags and configuration settings.
 

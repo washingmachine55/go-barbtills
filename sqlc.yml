@@ -15,9 +15,9 @@ sql:
               package: "database"
               out: "internal/database"
               sql_package: "database/sql"
-    - name: "rag"
+    - name: "rag_knowledge_base"
       engine: "postgresql"
-      schema: "database/migrations/rag"
+      schema: "database/migrations/rag_knowledge_base"
       database:
           managed: true
       gen:

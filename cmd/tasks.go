@@ -353,5 +353,5 @@ func init() {
 	tasksCmd.Flags().IntVar(&flagShowTask, "show", 0, "Show details for task ID")
 	tasksCmd.Flags().StringVar(&flagTruncateTable, "truncate", "", "Truncate all data in the tasks table. \nAcceptabled values are 'Y', 'Yes', or 1")
 
-	RootCmd.AddCommand(tasksCmd)
+	rootCmd.AddCommand(tasksCmd)
 }
