@@ -6,11 +6,11 @@ package cmd
 import (
 	cmdHelper "barbtils/internal/cmdHelper"
 	l "barbtils/internal/logger"
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	_ "github.com/lib/pq"
 	"github.com/spf13/cobra"
@@ -66,33 +66,30 @@ Use this at your own risk lol.`,
 			l.Logger.Debug("Logger Set to Debug")
 		}
 		initConfig()
-		// Only the root command (no subcommand) inherits this timeout; avoids killing `tasks` and others.
-		if cmd.Parent() != nil {
-			return
-		}
-		streamC, _ := streamTextCmd.Flags().GetBool("serve")
-		interactive, _ := tasksCmd.Flags().GetBool("interactive")
-		if !interactive || !streamC {
-			go func() {
-				time.Sleep(5 * time.Second)
-				fmt.Fprintln(os.Stderr, "Error: Command timed out!")
-				os.Exit(1)
-			}()
-		}
 	},
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
-	err := RootCmd.Execute()
 	signal.Ignore(syscall.SIGPIPE)
-	if err != nil {
+
+	// Ctrl-C cancels the command context, so in-flight queries and the TUI
+	// unwind instead of being killed mid-write.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := RootCmd.ExecuteContext(ctx); err != nil {
 		os.Exit(1)
 	}
 }
 
 func init() {
+	// Cobra prints the full usage block on any RunE error unless both the
+	// executed command and the root silence it. A failed action is not a usage
+	// mistake, so the message should stand alone.
+	RootCmd.SilenceUsage = true
+
 	cobra.OnInitialize(l.LoggerInit)
 	// cobra.OnInitialize(initDB)
 

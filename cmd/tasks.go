@@ -1,357 +1,834 @@
 package cmd
 
 import (
-	"barbtils/internal/database"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
-	"io"
-	"os"
-	"slices"
-	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"barbtils/internal/database"
+	"barbtils/internal/tasks"
+
 	_ "github.com/lib/pq"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
-// Lipgloss styles for task output (stdout). Keep contrast reasonable on light and dark terminals.
 var (
-	tasksAccent = lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true)
-	tasksOK     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	tasksWarn   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	tasksErr    = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
-	tasksMuted  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	tasksBorder = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("62")).Padding(0, 1)
-)
+	flagInteractive bool
 
-func openTasksDB() (*sql.DB, error) {
-	dbURL := viper.GetString("DB_URL")
-	if dbURL == "" {
-		return nil, fmt.Errorf("DB_URL is not configured — set it in your barbtils.toml or environment")
-	}
-	db, err := sql.Open("postgres", dbURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
-	}
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to reach database: %w", err)
-	}
-	return db, nil
-}
+	// Reference interpretation overrides, for the rare task literally named
+	// with digits.
+	flagRefName bool
+	flagRefSeq  bool
 
-var (
-	flagInteractive   bool
-	flagStopTask      int
-	flagTaskID        int
-	flagStopShort     bool
-	flagGetTasks      bool
-	flagRunning       bool
-	flagNewTask       string
-	flagShowTask      int
-	flagTruncateTable string
+	// list filters
+	flagListStatus  string
+	flagListRunning bool
+	flagListGrep    string
+
+	// new
+	flagNewStart    bool
+	flagNewType     string
+	flagNewPriority string
+	flagNewCategory []string
+	flagNewTags     []string
+
+	// edit
+	flagEditType     string
+	flagEditPriority string
+	flagEditCategory []string
+	flagEditTags     []string
+
+	// archive / rollover
+	flagShowArchived bool
+	flagUndoRollover bool
+
+	// confirmations
+	flagYes bool
+
+	// session edit
+	flagSessStart    string
+	flagSessEnd      string
+	flagSessClearEnd bool
 )
 
 var tasksCmd = &cobra.Command{
 	Use:   "tasks",
 	Short: "Task timer tracker",
-	Long: `Task timer tracker — create tasks with running timers, stop them, and view elapsed time.
-Uses PostgreSQL as the database (DB Requires Manual setup, including schema creation.)
+	Long: `Track time against named tasks. A task is referred to by its name — the
+primary handle — or by the short number shown in the listing.
+
+A task accumulates sessions. Pausing ends the current session but leaves the
+task resumable; starting it again opens a new one. The total for a task is the
+sum of its sessions, so time spent paused is never counted.
+
+Recurring tasks cycle between running and paused indefinitely and are retired
+with "archive"; only one-time tasks can be completed.
 
 Examples:
-  barbtils tasks -i                    Full-screen TUI (arrow keys + enter)
-  barbtils tasks --get_tasks           List running timers (end_time IS NULL)
-  barbtils tasks --get_tasks --running List completed timers
-  barbtils tasks --stop_task 53        Stop timer for task ID 53
-  barbtils tasks -s -t 53              Same (short form: stop + task id)
-  barbtils tasks --new "My task"       Create a new task
-  barbtils tasks --show 12             Show details for task ID 12
-  barbtils tasks --truncate yes        Removes all tasks, and resets counter to 1`,
+  barbtils tasks new "leetcode practice" --type recurring
+  barbtils tasks start "leetcode practice"
+  barbtils tasks pause "leetcode practice"
+  barbtils tasks start "leetcode practice"      # a new session, days later
+  barbtils tasks sessions "leetcode practice"
+  barbtils tasks ls
+  barbtils tasks stop 3                    # by number; completes a one-time task
+  barbtils tasks archive "leetcode practice"
+  barbtils tasks -i                        # full-screen TUI`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if flagInteractive {
-			db, err := openTasksDB()
-			if err != nil {
-				return err
-			}
-			defer db.Close()
-			return taskInteractiveLoop(db)
+			return runWithStore(func(ctx context.Context, s *tasks.Store, _ []string) error {
+				return taskInteractiveLoop(ctx, s)
+			})(cmd, args)
 		}
-
-		if flagGetTasks {
-			db, err := openTasksDB()
-			if err != nil {
-				return err
-			}
-			defer db.Close()
-			return getAllRunningTimers(db, flagRunning, nil)
-		}
-
-		stopID := 0
-		switch {
-		case flagStopTask > 0:
-			stopID = flagStopTask
-		case flagStopShort && flagTaskID > 0:
-			stopID = flagTaskID
-		case flagTaskID > 0 && !flagStopShort:
-			return fmt.Errorf("use --stop (-s) with --task-id (-t), or use --stop_task <id>")
-		}
-		if stopID > 0 {
-			db, err := openTasksDB()
-			if err != nil {
-				return err
-			}
-			defer db.Close()
-			return stopTimer(db, stopID, nil)
-		}
-
-		if flagNewTask != "" {
-			db, err := openTasksDB()
-			if err != nil {
-				return err
-			}
-			defer db.Close()
-			return saveNewTask(db, flagNewTask, nil)
-		}
-
-		if flagShowTask > 0 {
-			db, err := openTasksDB()
-			if err != nil {
-				return err
-			}
-			defer db.Close()
-			return showSpecificTimer(db, flagShowTask, nil)
-		}
-
-		allowedString := []string{"yes", "y", "1"}
-		if flagTruncateTable != "" {
-			flagTruncateTable = strings.ToLower(flagTruncateTable)
-			if slices.Contains(allowedString, flagTruncateTable) {
-				db, err := openTasksDB()
-				if err != nil {
-					return err
-				}
-				return truncateAllTasks(db, os.Stdout)
-			} else {
-				return fmt.Errorf("Please confirm with Yes, Y or 1")
-			}
-		}
-
-		fmt.Println(tasksMuted.Render("No action selected."))
-		fmt.Println(tasksMuted.Render("Run with --help to see options, or use -i for the interactive menu."))
-		return nil
+		return tasksListCmd.RunE(cmd, args)
 	},
 }
 
-func taskWriter(w io.Writer) io.Writer {
-	if w == nil {
-		return os.Stdout
-	}
-	return w
-}
-
-func saveNewTask(db *sql.DB, name string, w io.Writer) error {
-	ctx := context.Background()
-	sqlQ := database.New(db)
-	w = taskWriter(w)
-	now := time.Now()
-
-	if name == "" {
-		return fmt.Errorf("Task name must not be empty!")
-	}
-
-	t, err := sqlQ.CreateNewTask(ctx, database.CreateNewTaskParams{TaskName: name, StartTime: now})
-	if err != nil {
-		return fmt.Errorf("insert failed: %w", err)
-	}
-
-	fmt.Fprintln(w, tasksOK.Render("Created task #"+strconv.Itoa(int(t.ID)))+" "+tasksMuted.Render(t.TaskName))
-	fmt.Fprintln(w, formatTaskBlock(t))
-	return nil
-}
-
-func savedEditedTask(db *sql.DB, taskID int, endTime time.Time, w io.Writer) error {
-	ctx := context.Background()
-	sqlQ := database.New(db)
-	w = taskWriter(w)
-
-	t, err := sqlQ.UpdateSelectedTask(ctx, database.UpdateSelectedTaskParams{
-		ID: int32(taskID),
-		EndTime: sql.NullTime{
-			Time:  endTime,
-			Valid: true,
-		},
-	})
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("no running task found with ID %d", taskID)
-		}
-		return fmt.Errorf("update failed: %w", err)
-	}
-
-	fmt.Fprintln(w, tasksOK.Render("Stopped task #"+strconv.Itoa(int(t.ID))))
-	fmt.Fprintln(w, formatTaskBlock(t))
-
-	diff := t.EndTime.Time.Sub(t.StartTime)
-	fmt.Fprintln(w, tasksWarn.Render("Elapsed ")+tasksAccent.Render(fmtDuration(diff)))
-	return nil
-}
-
-func stopTimer(db *sql.DB, id int, w io.Writer) error {
-	return savedEditedTask(db, id, time.Now(), w)
-}
-
-// truncateAllTasks removes all rows from tasks (used by interactive TUI after confirmation).
-func truncateAllTasks(db *sql.DB, w io.Writer) error {
-	w = taskWriter(w)
-	fmt.Fprintln(w, tasksWarn.Render("Truncating tasks table…"))
-	if _, err := db.Exec(`TRUNCATE TABLE tasks RESTART IDENTITY CASCADE`); err != nil {
-		return fmt.Errorf("truncate failed: %w", err)
-	}
-	fmt.Fprintln(w, tasksOK.Render("Done. All task rows were removed."))
-	return nil
-}
-
-func getAllRunningTimers(db *sql.DB, isCompleted bool, w io.Writer) error {
-	ctx := context.Background()
-	sqlQ := database.New(db)
-	w = taskWriter(w)
-	var title string
-	if isCompleted {
-		title = "Completed tasks"
-	} else {
-		title = "Running tasks"
-	}
-
-	var tasks []database.Task
-	if ct, err := sqlQ.CompletedTasks(ctx); isCompleted {
+// runWithStore opens the database, runs fn, and always closes the handle.
+// Deliberately a wrapper rather than a PersistentPreRunE on tasksCmd: cobra
+// runs only the closest PersistentPreRun in the chain, and the root's is what
+// calls initConfig() to populate DB_URL.
+func runWithStore(fn func(ctx context.Context, s *tasks.Store, args []string) error) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		st, err := tasks.Open(viper.GetString("DB_URL"))
 		if err != nil {
-			return fmt.Errorf("Error fetching running tasks: %v", err)
+			return err
 		}
-		tasks = ct
-	} else {
-		rt, err := sqlQ.RunningTasks(ctx)
-		if err != nil {
-			return fmt.Errorf("Error fetching running tasks: %v", err)
-		}
-		tasks = rt
+		defer st.Close()
+		return fn(cmd.Context(), st, args)
 	}
+}
 
-	fmt.Fprintln(w, tasksAccent.Render(title))
-	if len(tasks) == 0 {
-		fmt.Fprintln(w, tasksMuted.Render("  (none)"))
+// runWithStoreCmd is runWithStore for commands that must inspect their own
+// flags, e.g. to tell "--tag not passed" from "--tag passed empty".
+func runWithStoreCmd(fn func(cmd *cobra.Command, ctx context.Context, s *tasks.Store, args []string) error) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		st, err := tasks.Open(viper.GetString("DB_URL"))
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		return fn(cmd, cmd.Context(), st, args)
+	}
+}
+
+func refMode() tasks.RefMode {
+	switch {
+	case flagRefName:
+		return tasks.RefName
+	case flagRefSeq:
+		return tasks.RefSeq
+	default:
+		return tasks.RefAuto
+	}
+}
+
+// addRefFlags gives every command taking a <task> the disambiguation escape hatch.
+func addRefFlags(c *cobra.Command) {
+	c.Flags().BoolVar(&flagRefName, "name", false, "Treat the argument as a task name, even if it is all digits")
+	c.Flags().BoolVar(&flagRefSeq, "seq", false, "Treat the argument as a task number")
+	c.MarkFlagsMutuallyExclusive("name", "seq")
+}
+
+var tasksListCmd = &cobra.Command{
+	Use:     "ls",
+	Aliases: []string{"list"},
+	Short:   "List tasks with their total tracked time",
+	Args:    cobra.NoArgs,
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, _ []string) error {
+		f := tasks.Filter{OnlyOpen: flagListRunning}
+		if flagListStatus != "" {
+			st, err := parseStatus(flagListStatus)
+			if err != nil {
+				return err
+			}
+			f.Status = &st
+		}
+		if flagListGrep != "" {
+			f.NameLike = &flagListGrep
+		}
+		rows, err := s.ListTasks(ctx, f)
+		if err != nil {
+			return err
+		}
+		fmt.Println(renderTaskTable(rows, time.Now()))
 		return nil
-	}
-
-	if isCompleted {
-		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "ID\tTASK\tSTART TIME\tEND TIME\tTOTAL TASK TIME")
-		for _, r := range tasks {
-			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", r.ID, r.TaskName, r.StartTime.Format("03:04:05 PM"), r.EndTime.Time.Format("03:04:05 PM"), tasksAccent.Render(getHumanReadableTimeDiff(r, w, false)))
-		}
-		return tw.Flush()
-	} else {
-		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "ID\tTASK\tSTART TIME\tElapsed Time")
-		for _, r := range tasks {
-			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\n", r.ID, r.TaskName, r.StartTime.Format("03:04:05 PM"), tasksAccent.Render(getHumanReadableTimeDiff(r, w, false)))
-		}
-		return tw.Flush()
-	}
+	}),
 }
 
-func showSpecificTimer(db *sql.DB, id int, w io.Writer) error {
-	ctx := context.Background()
-	sqlQ := database.New(db)
-	w = taskWriter(w)
-	t, err := sqlQ.ShowSpecificTimer(ctx, int32(id))
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("no task found with ID %d", id)
+var tasksNewCmd = &cobra.Command{
+	Use:   "new <name>",
+	Short: "Create a task (does not start it unless --start is given)",
+	Args:  cobra.ExactArgs(1),
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, args []string) error {
+		in := tasks.NewTaskInput{Name: args[0], Tags: flagNewTags}
+		if flagNewType != "" {
+			t, err := parseType(flagNewType)
+			if err != nil {
+				return err
+			}
+			in.Type = t
 		}
-		return fmt.Errorf("query failed: %w", err)
-	}
+		if flagNewPriority != "" {
+			p, err := parsePriority(flagNewPriority)
+			if err != nil {
+				return err
+			}
+			in.Priority = p
+		}
+		for _, c := range flagNewCategory {
+			cat, err := parseCategory(c)
+			if err != nil {
+				return err
+			}
+			in.Category = append(in.Category, cat)
+		}
 
-	fmt.Fprintln(w, tasksAccent.Render("Task #"+strconv.Itoa(int(t.ID))))
-	fmt.Fprintln(w, formatTaskBlock(t))
-
-	fmt.Fprintln(w, tasksWarn.Render("Elapsed ")+tasksAccent.Render(getHumanReadableTimeDiff(t, w, true)))
-	return nil
+		if flagNewStart {
+			res, err := s.CreateTaskAndStart(ctx, in)
+			if err != nil {
+				return err
+			}
+			fmt.Println(tasksOK.Render(fmt.Sprintf("Created #%d %q and started session s%d",
+				res.Task.Seq, res.Task.Name, res.Session.Seq)))
+			return nil
+		}
+		t, err := s.CreateTask(ctx, in)
+		if err != nil {
+			return err
+		}
+		fmt.Println(tasksOK.Render(fmt.Sprintf("Created #%d %q", t.Seq, t.Name)) + " " +
+			tasksMuted.Render("start it with: barbtils tasks start "+quote(t.Name)))
+		return nil
+	}),
 }
 
-func getHumanReadableTimeDiff(t database.Task, w io.Writer, status bool) string {
-	var diff time.Duration
-	if !t.EndTime.Valid {
-		// diff = time.Now().In(time.Local).Sub(t.StartTime)
-		diff = time.Now().UTC().Sub(t.StartTime.UTC())
-		if status {
-			fmt.Fprintln(w, tasksWarn.Render("Status: running"))
+var tasksStartCmd = &cobra.Command{
+	Use:   "start <task>",
+	Short: "Start a new session (also how a paused task resumes)",
+	Args:  cobra.ExactArgs(1),
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, args []string) error {
+		t, err := s.ResolveTask(ctx, args[0], refMode())
+		if err != nil {
+			return err
 		}
-	} else {
-		diff = t.EndTime.Time.Sub(t.StartTime)
-		if status {
-			fmt.Fprintln(w, tasksMuted.Render("Status: completed"))
+		res, err := s.Start(ctx, t.ID)
+		if err != nil {
+			if errors.Is(err, tasks.ErrAlreadyRunning) {
+				return fmt.Errorf("#%d %q is already running", t.Seq, t.Name)
+			}
+			return err
 		}
-	}
-
-	return fmtDuration(diff)
+		fmt.Println(tasksOK.Render(fmt.Sprintf("Started session s%d on #%d %q",
+			res.Session.Seq, res.Task.Seq, res.Task.Name)) + " " +
+			tasksMuted.Render("total so far "+fmtShort(res.Total)))
+		return nil
+	}),
 }
 
-func fmtDuration(d time.Duration) string {
-	if d < 0 {
-		d = -d
-	}
-	total := int(d.Seconds())
-	days := total / 86400
-	hours := (total % 86400) / 3600
-	minutes := (total % 3600) / 60
-	seconds := total % 60
-
-	var parts []string
-	if days > 0 {
-		parts = append(parts, fmt.Sprintf("%d days", days))
-	}
-	if hours > 0 {
-		parts = append(parts, fmt.Sprintf("%d hours", hours))
-	}
-	if minutes > 0 {
-		parts = append(parts, fmt.Sprintf("%d minutes", minutes))
-	}
-	if seconds > 0 || len(parts) == 0 {
-		parts = append(parts, fmt.Sprintf("%d seconds", seconds))
-	}
-	return strings.Join(parts, ", ")
+var tasksPauseCmd = &cobra.Command{
+	Use:   "pause <task>",
+	Short: "End the current session; the task stays resumable",
+	Args:  cobra.ExactArgs(1),
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, args []string) error {
+		t, err := s.ResolveTask(ctx, args[0], refMode())
+		if err != nil {
+			return err
+		}
+		res, err := s.Pause(ctx, t.ID)
+		if err != nil {
+			if errors.Is(err, tasks.ErrNotRunning) {
+				return fmt.Errorf("#%d %q is not running", t.Seq, t.Name)
+			}
+			return err
+		}
+		sess := tasks.SessionOf(*res.Session)
+		fmt.Println(tasksWarn.Render(fmt.Sprintf("Paused #%d %q", res.Task.Seq, res.Task.Name)) +
+			tasksMuted.Render(fmt.Sprintf(" — session s%d ran %s, total ", sess.Seq, fmtShort(sess.Duration))) +
+			tasksAccent.Render(fmtShort(res.Total)))
+		return nil
+	}),
 }
 
-func formatTaskBlock(t database.Task) string {
-	end := "—"
-	if t.EndTime.Valid {
-		end = t.EndTime.Time.Format(time.RFC3339)
+var tasksStopCmd = &cobra.Command{
+	Use:     "stop <task>",
+	Aliases: []string{"done", "complete"},
+	Short:   "Close the session and complete the task (not for recurring tasks)",
+	Args:    cobra.ExactArgs(1),
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, args []string) error {
+		t, err := s.ResolveTask(ctx, args[0], refMode())
+		if err != nil {
+			return err
+		}
+		res, err := s.Complete(ctx, t)
+		if err != nil {
+			if errors.Is(err, tasks.ErrRecurringCannotComplete) {
+				return fmt.Errorf("#%d %q is recurring, so it cannot be completed — retire it with: barbtils tasks archive %s",
+					t.Seq, t.Name, quote(t.Name))
+			}
+			return err
+		}
+		fmt.Println(tasksOK.Render(fmt.Sprintf("Completed #%d %q", res.Task.Seq, res.Task.Name)) + " " +
+			tasksMuted.Render("total ") + tasksAccent.Render(fmtDuration(res.Total)))
+		return nil
+	}),
+}
+
+var tasksArchiveCmd = &cobra.Command{
+	Use:   "archive <task>",
+	Short: "Close any open session and archive the task",
+	Args:  cobra.ExactArgs(1),
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, args []string) error {
+		t, err := s.ResolveTask(ctx, args[0], refMode())
+		if err != nil {
+			return err
+		}
+		res, err := s.Archive(ctx, t.ID)
+		if err != nil {
+			return err
+		}
+		fmt.Println(tasksOK.Render(fmt.Sprintf("Archived #%d %q", res.Task.Seq, res.Task.Name)) + " " +
+			tasksMuted.Render("total ") + tasksAccent.Render(fmtDuration(res.Total)))
+		return nil
+	}),
+}
+
+var tasksShowCmd = &cobra.Command{
+	Use:   "show <task>",
+	Short: "Show a task in detail with its session history",
+	Args:  cobra.ExactArgs(1),
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, args []string) error {
+		t, err := s.ResolveTask(ctx, args[0], refMode())
+		if err != nil {
+			return err
+		}
+		row, err := s.GetTaskRow(ctx, t.Seq)
+		if err != nil {
+			return err
+		}
+		sessions, err := s.Sessions(ctx, t.ID, flagShowArchived)
+		if err != nil {
+			return err
+		}
+		fmt.Println(renderTaskDetail(row, sessions, time.Now()))
+		return nil
+	}),
+}
+
+var tasksSessionsCmd = &cobra.Command{
+	Use:   "sessions <task>",
+	Short: "List every session recorded against a task",
+	Args:  cobra.ExactArgs(1),
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, args []string) error {
+		t, err := s.ResolveTask(ctx, args[0], refMode())
+		if err != nil {
+			return err
+		}
+		sessions, err := s.Sessions(ctx, t.ID, flagShowArchived)
+		if err != nil {
+			return err
+		}
+		row, err := s.GetTaskRow(ctx, t.Seq)
+		if err != nil {
+			return err
+		}
+		fmt.Println(tasksAccent.Render(fmt.Sprintf("#%d %s", t.Seq, t.Name)))
+		if len(sessions) == 0 {
+			fmt.Println(sessionsEmptyNote(row, flagShowArchived))
+			return nil
+		}
+		fmt.Println(renderSessionTable(sessions))
+		return nil
+	}),
+}
+
+var tasksRenameCmd = &cobra.Command{
+	Use:   "rename <task> <new-name>",
+	Short: "Rename a task, keeping its number and session history",
+	Args:  cobra.ExactArgs(2),
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, args []string) error {
+		t, err := s.ResolveTask(ctx, args[0], refMode())
+		if err != nil {
+			return err
+		}
+		renamed, err := s.Rename(ctx, t.ID, args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Println(tasksOK.Render(fmt.Sprintf("Renamed #%d %q -> %q", renamed.Seq, t.Name, renamed.Name)))
+		return nil
+	}),
+}
+
+var tasksEditCmd = &cobra.Command{
+	Use:   "edit <task>",
+	Short: "Change a task's type, priority, categories or tags",
+	Long: `Change a task's configuration. Only the flags you pass are altered.
+
+  --category and --tag replace the whole list; pass an empty value to clear,
+  e.g. --tag "" removes every tag.
+
+Examples:
+  barbtils tasks edit "leetcode practice" --priority high
+  barbtils tasks edit "leetcode practice" --tag api --tag urgent
+  barbtils tasks edit 3 --type recurring --category client-project`,
+	Args: cobra.ExactArgs(1),
+	RunE: runWithStoreCmd(func(cmd *cobra.Command, ctx context.Context, s *tasks.Store, args []string) error {
+		t, err := s.ResolveTask(ctx, args[0], refMode())
+		if err != nil {
+			return err
+		}
+
+		var patch tasks.MetaPatch
+		if flagEditType != "" {
+			v, err := parseType(flagEditType)
+			if err != nil {
+				return err
+			}
+			patch.Type = &v
+		}
+		if flagEditPriority != "" {
+			v, err := parsePriority(flagEditPriority)
+			if err != nil {
+				return err
+			}
+			patch.Priority = &v
+		}
+		if cmd.Flags().Changed("category") {
+			cats := []database.TasksCategories{}
+			for _, c := range flagEditCategory {
+				if strings.TrimSpace(c) == "" {
+					continue
+				}
+				v, err := parseCategory(c)
+				if err != nil {
+					return err
+				}
+				cats = append(cats, v)
+			}
+			patch.Category = cats
+		}
+		if cmd.Flags().Changed("tag") {
+			tags := []string{}
+			for _, tag := range flagEditTags {
+				if tag = strings.TrimSpace(tag); tag != "" {
+					tags = append(tags, tag)
+				}
+			}
+			patch.Tags = tags
+		}
+
+		if patch.IsEmpty() {
+			return errors.New("nothing to change — pass --type, --priority, --category or --tag")
+		}
+		updated, err := s.UpdateMeta(ctx, t.ID, patch)
+		if err != nil {
+			return err
+		}
+		fmt.Println(tasksOK.Render(fmt.Sprintf("Updated #%d %q", updated.Seq, updated.Name)))
+		row, err := s.GetTaskRow(ctx, updated.Seq)
+		if err != nil {
+			return err
+		}
+		sessions, err := s.Sessions(ctx, updated.ID, false)
+		if err != nil {
+			return err
+		}
+		fmt.Println(renderTaskDetail(row, sessions, time.Now()))
+		return nil
+	}),
+}
+
+var tasksRmCmd = &cobra.Command{
+	Use:   "rm <task>",
+	Short: "Delete a task and all of its recorded sessions",
+	Args:  cobra.ExactArgs(1),
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, args []string) error {
+		t, err := s.ResolveTask(ctx, args[0], refMode())
+		if err != nil {
+			return err
+		}
+		row, err := s.GetTaskRow(ctx, t.Seq)
+		if err != nil {
+			return err
+		}
+		if !flagYes {
+			return fmt.Errorf("this deletes #%d %q and its %d recorded session(s) — re-run with --yes to confirm, or use: barbtils tasks archive %s",
+				row.Seq, row.Name, row.SessionCount, quote(row.Name))
+		}
+		if err := s.DeleteTask(ctx, t.ID); err != nil {
+			return err
+		}
+		fmt.Println(tasksWarn.Render(fmt.Sprintf("Deleted #%d %q and %d session(s)", row.Seq, row.Name, row.SessionCount)))
+		return nil
+	}),
+}
+
+var tasksRolloverCmd = &cobra.Command{
+	Use:     "rollover <task>",
+	Aliases: []string{"archive-sessions"},
+	Short:   "Bank the task's finished sessions, resetting its running total",
+	Long: `Archive every finished session of a task so its total starts again from zero,
+without losing any history.
+
+Made for a recurring task you return to daily: roll it over at the end of the
+day and the next day's total counts only that day's sessions. Archived time is
+still in the record -- "tasks show" reports it as the lifetime total, and
+"tasks sessions <task> --archived" lists it.
+
+A session still running is deliberately left alone, so a timer spanning the
+rollover keeps counting into the new period.
+
+  --undo brings every archived session of the task back into the total.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, args []string) error {
+		t, err := s.ResolveTask(ctx, args[0], refMode())
+		if err != nil {
+			return err
+		}
+
+		if flagUndoRollover {
+			restored, err := s.UnarchiveSessions(ctx, t.ID)
+			if err != nil {
+				return err
+			}
+			if len(restored) == 0 {
+				return fmt.Errorf("#%d %q has no archived sessions", t.Seq, t.Name)
+			}
+			var d time.Duration
+			for _, r := range restored {
+				d += r.Duration
+			}
+			fmt.Println(tasksOK.Render(fmt.Sprintf("Restored %s to #%d %q", plural(len(restored), "session"), t.Seq, t.Name)) +
+				tasksMuted.Render(" adding back ") + tasksAccent.Render(fmtDuration(d)))
+			return nil
+		}
+
+		banked, err := s.ArchiveSessions(ctx, t.ID)
+		if err != nil {
+			return err
+		}
+		if len(banked) == 0 {
+			return fmt.Errorf("#%d %q has no finished sessions to archive", t.Seq, t.Name)
+		}
+		var d time.Duration
+		for _, r := range banked {
+			d += r.Duration
+		}
+		row, err := s.GetTaskRow(ctx, t.Seq)
+		if err != nil {
+			return err
+		}
+		fmt.Println(tasksOK.Render(fmt.Sprintf("Archived %s on #%d %q", plural(len(banked), "session"), t.Seq, t.Name)) +
+			tasksMuted.Render(" banking ") + tasksAccent.Render(fmtDuration(d)))
+		if row.IsRunning() {
+			fmt.Println(tasksMuted.Render("A session is still running and keeps counting into the new period."))
+		}
+		fmt.Println(tasksMuted.Render("Total now ") + tasksAccent.Render(fmtDuration(row.Elapsed(time.Now()))) +
+			tasksMuted.Render("  ·  lifetime ") + tasksAccent.Render(fmtDuration(row.Lifetime(time.Now()))))
+		return nil
+	}),
+}
+
+var tasksSessionArchiveCmd = &cobra.Command{
+	Use:   "archive <session>",
+	Short: "Bank one finished session",
+	Args:  cobra.ExactArgs(1),
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, args []string) error {
+		seq, err := tasks.ParseSeq(args[0])
+		if err != nil {
+			return err
+		}
+		row, err := s.ArchiveSession(ctx, seq)
+		if err != nil {
+			return err
+		}
+		fmt.Println(tasksOK.Render(fmt.Sprintf("Archived session s%d", row.Seq)) +
+			tasksMuted.Render(" banking ") + tasksAccent.Render(fmtShort(row.Duration)))
+		return nil
+	}),
+}
+
+var tasksSessionUnarchiveCmd = &cobra.Command{
+	Use:   "unarchive <session>",
+	Short: "Return one banked session to the total",
+	Args:  cobra.ExactArgs(1),
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, args []string) error {
+		seq, err := tasks.ParseSeq(args[0])
+		if err != nil {
+			return err
+		}
+		row, err := s.UnarchiveSession(ctx, seq)
+		if err != nil {
+			return err
+		}
+		fmt.Println(tasksOK.Render(fmt.Sprintf("Restored session s%d", row.Seq)) +
+			tasksMuted.Render(" adding back ") + tasksAccent.Render(fmtShort(row.Duration)))
+		return nil
+	}),
+}
+
+var tasksSessionCmd = &cobra.Command{
+	Use:   "session",
+	Short: "Operate on an individual session by its number",
+}
+
+var tasksSessionCloseCmd = &cobra.Command{
+	Use:   "close <session>",
+	Short: "End one specific open session",
+	Args:  cobra.ExactArgs(1),
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, args []string) error {
+		seq, err := tasks.ParseSeq(args[0])
+		if err != nil {
+			return err
+		}
+		sess, err := s.CloseSession(ctx, seq)
+		if err != nil {
+			return err
+		}
+		row := tasks.SessionOf(sess)
+		fmt.Println(tasksOK.Render(fmt.Sprintf("Closed session s%d", row.Seq)) + " " +
+			tasksMuted.Render("ran ") + tasksAccent.Render(fmtShort(row.Duration)))
+		return nil
+	}),
+}
+
+var tasksSessionRmCmd = &cobra.Command{
+	Use:   "rm <session>",
+	Short: "Delete one session",
+	Args:  cobra.ExactArgs(1),
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, args []string) error {
+		seq, err := tasks.ParseSeq(args[0])
+		if err != nil {
+			return err
+		}
+		if !flagYes {
+			return fmt.Errorf("this permanently removes session s%d from the record — re-run with --yes to confirm", seq)
+		}
+		if err := s.DeleteSession(ctx, seq); err != nil {
+			return err
+		}
+		fmt.Println(tasksWarn.Render(fmt.Sprintf("Deleted session s%d", seq)))
+		return nil
+	}),
+}
+
+var tasksSessionEditCmd = &cobra.Command{
+	Use:   "edit <session>",
+	Short: "Correct a session's start or end time",
+	Args:  cobra.ExactArgs(1),
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, args []string) error {
+		seq, err := tasks.ParseSeq(args[0])
+		if err != nil {
+			return err
+		}
+		p := database.SetSessionTimesParams{Seq: seq, ClearEndTime: flagSessClearEnd}
+		if flagSessStart != "" {
+			t, err := parseWhen(flagSessStart)
+			if err != nil {
+				return err
+			}
+			p.StartTime = nullTime(t)
+		}
+		if flagSessEnd != "" {
+			if flagSessClearEnd {
+				return errors.New("use either --end or --clear-end, not both")
+			}
+			t, err := parseWhen(flagSessEnd)
+			if err != nil {
+				return err
+			}
+			p.EndTime = nullTime(t)
+		}
+		sess, err := s.Queries().SetSessionTimes(ctx, p)
+		if err != nil {
+			return err
+		}
+		row := tasks.SessionOf(sess)
+		fmt.Println(tasksOK.Render(fmt.Sprintf("Updated session s%d", row.Seq)) + " " +
+			tasksMuted.Render("now ") + tasksAccent.Render(fmtShort(row.Duration)))
+		return nil
+	}),
+}
+
+var tasksDoctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "Report tasks whose status disagrees with their sessions",
+	Args:  cobra.NoArgs,
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, _ []string) error {
+		bad, err := s.Doctor(ctx)
+		if err != nil {
+			return err
+		}
+		if len(bad) == 0 {
+			fmt.Println(tasksOK.Render("All tasks consistent with their sessions."))
+			return nil
+		}
+		fmt.Println(tasksWarn.Render("Inconsistent tasks:"))
+		for _, r := range bad {
+			fmt.Printf("  #%d %s — status %s but %d open session(s)\n", r.Seq, r.Name, r.Status, r.OpenSessions)
+		}
+		return nil
+	}),
+}
+
+var tasksTruncateCmd = &cobra.Command{
+	Use:   "truncate",
+	Short: "Delete every task and session",
+	Args:  cobra.NoArgs,
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, _ []string) error {
+		if !flagYes {
+			return errors.New("this deletes every task and every recorded session — re-run with --yes to confirm")
+		}
+		if err := s.TruncateAll(ctx); err != nil {
+			return err
+		}
+		fmt.Println(tasksWarn.Render("All task data removed."))
+		return nil
+	}),
+}
+
+var tasksTuiCmd = &cobra.Command{
+	Use:   "tui",
+	Short: "Full-screen interactive task view",
+	Args:  cobra.NoArgs,
+	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, _ []string) error {
+		return taskInteractiveLoop(ctx, s)
+	}),
+}
+
+// ---- enum + time parsing ----
+
+func parseStatus(v string) (database.TasksStatuses, error) {
+	all := []database.TasksStatuses{
+		database.TasksStatusesPending, database.TasksStatusesInProgress,
+		database.TasksStatusesCompleted, database.TasksStatusesPaused,
+		database.TasksStatusesArchived,
 	}
-	lines := []string{
-		tasksMuted.Render("Start: ") + t.StartTime.Format(time.RFC3339),
-		tasksMuted.Render("End:   ") + end,
+	for _, s := range all {
+		if strings.EqualFold(string(s), v) || strings.EqualFold(collapse(string(s)), collapse(v)) {
+			return s, nil
+		}
 	}
-	if t.TaskName != "" {
-		lines = append([]string{tasksMuted.Render("Name:  ") + t.TaskName}, lines...)
+	return "", fmt.Errorf("unknown status %q: expected one of pending, in-progress, completed, paused, archived", v)
+}
+
+func parseType(v string) (database.TasksTypes, error) {
+	for _, t := range []database.TasksTypes{database.TasksTypesRecurring, database.TasksTypesOneTime} {
+		if strings.EqualFold(string(t), v) || strings.EqualFold(collapse(string(t)), collapse(v)) {
+			return t, nil
+		}
 	}
-	return strings.Join(lines, "\n")
+	return "", fmt.Errorf("unknown type %q: expected recurring or one-time", v)
+}
+
+func parsePriority(v string) (database.TasksPriorities, error) {
+	all := []database.TasksPriorities{
+		database.TasksPrioritiesUnknown, database.TasksPrioritiesVeryLow,
+		database.TasksPrioritiesLow, database.TasksPrioritiesMedium,
+		database.TasksPrioritiesHigh, database.TasksPrioritiesVeryHigh,
+	}
+	for _, p := range all {
+		if strings.EqualFold(string(p), v) || strings.EqualFold(collapse(string(p)), collapse(v)) {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("unknown priority %q: expected one of unknown, very-low, low, medium, high, very-high", v)
+}
+
+func parseCategory(v string) (database.TasksCategories, error) {
+	all := []database.TasksCategories{
+		database.TasksCategoriesUnknown, database.TasksCategoriesClientProject,
+		database.TasksCategoriesPersonalProject, database.TasksCategoriesTroubleshooting,
+		database.TasksCategoriesRoutine,
+	}
+	for _, c := range all {
+		if strings.EqualFold(string(c), v) || strings.EqualFold(collapse(string(c)), collapse(v)) {
+			return c, nil
+		}
+	}
+	return "", fmt.Errorf("unknown category %q: expected one of unknown, client-project, personal-project, troubleshooting, routine", v)
+}
+
+// collapse makes "In Progress", "in-progress" and "inprogress" comparable.
+func collapse(s string) string {
+	return strings.NewReplacer(" ", "", "-", "", "_", "").Replace(strings.ToLower(s))
+}
+
+// parseWhen accepts RFC3339, "2006-01-02 15:04", "2006-01-02 15:04:05" and "15:04"
+// (today), in local time.
+func parseWhen(v string) (time.Time, error) {
+	v = strings.TrimSpace(v)
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02 15:04"} {
+		if t, err := time.ParseInLocation(layout, v, time.Local); err == nil {
+			return t, nil
+		}
+	}
+	if t, err := time.ParseInLocation("15:04", v, time.Local); err == nil {
+		now := time.Now()
+		return time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), t.Minute(), 0, 0, time.Local), nil
+	}
+	return time.Time{}, fmt.Errorf("cannot parse time %q: try 15:04, \"2006-01-02 15:04\" or RFC3339", v)
+}
+
+func nullTime(t time.Time) sql.NullTime {
+	return sql.NullTime{Time: t, Valid: true}
+}
+
+func quote(s string) string {
+	if strings.ContainsAny(s, " \t\"'") {
+		return fmt.Sprintf("%q", s)
+	}
+	return s
 }
 
 func init() {
-	tasksCmd.Flags().BoolVarP(&flagInteractive, "interactive", "i", false, "Start interactive session")
-	tasksCmd.Flags().BoolVarP(&flagGetTasks, "get_tasks", "g", false, "List tasks")
-	tasksCmd.Flags().BoolVarP(&flagRunning, "running", "r", false, "Show completed tasks (use with --get_tasks)")
-	tasksCmd.Flags().IntVar(&flagStopTask, "stop_task", 0, "Stop timer for task ID")
-	tasksCmd.Flags().BoolVarP(&flagStopShort, "stop", "s", false, "Stop action (use with -t)")
-	tasksCmd.Flags().IntVarP(&flagTaskID, "task-id", "t", 0, "Task ID (use with -s)")
-	tasksCmd.Flags().StringVarP(&flagNewTask, "new", "n", "", "Create a new task with given name")
-	tasksCmd.Flags().IntVar(&flagShowTask, "show", 0, "Show details for task ID")
-	tasksCmd.Flags().StringVar(&flagTruncateTable, "truncate", "", "Truncate all data in the tasks table. \nAcceptabled values are 'Y', 'Yes', or 1")
+	tasksCmd.Flags().BoolVarP(&flagInteractive, "interactive", "i", false, "Start the interactive TUI")
 
+	tasksListCmd.Flags().StringVar(&flagListStatus, "status", "", "Only tasks with this status")
+	tasksListCmd.Flags().BoolVarP(&flagListRunning, "running", "r", false, "Only tasks with an open session")
+	tasksListCmd.Flags().StringVar(&flagListGrep, "grep", "", "Only tasks whose name contains this text")
+
+	tasksNewCmd.Flags().BoolVar(&flagNewStart, "start", false, "Open a session immediately")
+	tasksNewCmd.Flags().StringVar(&flagNewType, "type", "", "recurring or one-time (default one-time)")
+	tasksNewCmd.Flags().StringVar(&flagNewPriority, "priority", "", "unknown, very-low, low, medium, high, very-high")
+	tasksNewCmd.Flags().StringSliceVar(&flagNewCategory, "category", nil, "Category (repeatable)")
+	tasksNewCmd.Flags().StringSliceVar(&flagNewTags, "tag", nil, "Tag (repeatable)")
+
+	for _, c := range []*cobra.Command{
+		tasksStartCmd, tasksPauseCmd, tasksStopCmd, tasksArchiveCmd,
+		tasksShowCmd, tasksSessionsCmd, tasksRenameCmd, tasksRmCmd, tasksEditCmd, tasksRolloverCmd,
+	} {
+		addRefFlags(c)
+	}
+
+	tasksEditCmd.Flags().StringVar(&flagEditType, "type", "", "recurring or one-time")
+	tasksEditCmd.Flags().StringVar(&flagEditPriority, "priority", "", "unknown, very-low, low, medium, high, very-high")
+	tasksEditCmd.Flags().StringSliceVar(&flagEditCategory, "category", nil, "Replace categories (repeatable; empty clears)")
+	tasksEditCmd.Flags().StringSliceVar(&flagEditTags, "tag", nil, "Replace tags (repeatable; empty clears)")
+
+	tasksRmCmd.Flags().BoolVar(&flagYes, "yes", false, "Confirm destruction of recorded time")
+	tasksTruncateCmd.Flags().BoolVar(&flagYes, "yes", false, "Confirm destruction of all recorded time")
+	tasksSessionRmCmd.Flags().BoolVar(&flagYes, "yes", false, "Confirm removal of the session")
+
+	tasksSessionEditCmd.Flags().StringVar(&flagSessStart, "start", "", "New start time")
+	tasksSessionEditCmd.Flags().StringVar(&flagSessEnd, "end", "", "New end time")
+	tasksSessionEditCmd.Flags().BoolVar(&flagSessClearEnd, "clear-end", false, "Reopen the session by clearing its end time")
+
+	tasksSessionsCmd.Flags().BoolVar(&flagShowArchived, "archived", false, "Include archived sessions")
+	tasksShowCmd.Flags().BoolVar(&flagShowArchived, "archived", false, "Include archived sessions")
+	tasksRolloverCmd.Flags().BoolVar(&flagUndoRollover, "undo", false, "Bring archived sessions back into the total")
+
+	tasksSessionCmd.AddCommand(tasksSessionCloseCmd, tasksSessionRmCmd, tasksSessionEditCmd,
+		tasksSessionArchiveCmd, tasksSessionUnarchiveCmd)
+	tasksCmd.AddCommand(
+		tasksListCmd, tasksNewCmd, tasksStartCmd, tasksPauseCmd, tasksStopCmd,
+		tasksArchiveCmd, tasksShowCmd, tasksSessionsCmd, tasksRenameCmd, tasksRmCmd, tasksEditCmd,
+		tasksSessionCmd, tasksRolloverCmd, tasksDoctorCmd, tasksTruncateCmd, tasksTuiCmd,
+	)
 	RootCmd.AddCommand(tasksCmd)
 }

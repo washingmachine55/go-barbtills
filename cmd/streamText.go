@@ -297,7 +297,7 @@ func webSocketServer(auth bool) {
 	if auth {
 		l.Logger.Debug("Using Auth ")
 		sessionToken = generatePassphrase()
-		l.Logger.Infof("[SESSION TOKEN: %s]", sessionToken)  // prints to terminal
+		l.Logger.Infof("[SESSION TOKEN: %s]", sessionToken) // prints to terminal
 	}
 
 	http.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(assetsFS))))
@@ -305,7 +305,7 @@ func webSocketServer(auth bool) {
 	http.HandleFunc("/ws", serveWs)
 	http.HandleFunc("/content", serveContent)
 	http.HandleFunc("/save", saveStreamedFile)
-	
+
 	var skipLog = map[string]bool{
 		"/assets/": true,
 	}
@@ -324,7 +324,7 @@ func webSocketServer(auth bool) {
 			http.DefaultServeMux.ServeHTTP(w, r)
 			return
 		}
-		
+
 		m := httpsnoop.CaptureMetrics(http.DefaultServeMux, w, r)
 		l.Logger.Debug("[HTTP LOGGER]",
 			"Method",

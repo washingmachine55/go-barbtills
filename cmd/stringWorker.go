@@ -55,22 +55,21 @@ func init() {
 	stringWorker.Flags().BoolVarP(&pretty, "pretty", "p", false, "Use this to get a main pretty output")
 }
 
-func processText(message string) (string) {
+func processText(message string) string {
 	hoursAndMinsReGex, err := regexp.Compile(`(\d\d:\d\d)`)
 	if err != nil {
 		l.Logger.Fatal(err)
 	}
-	
-	matches := hoursAndMinsReGex.FindAllString(message,-1)
+
+	matches := hoursAndMinsReGex.FindAllString(message, -1)
 	l.Logger.Debug("[MATCHES LENGTH]", "Matches Arr", len(matches))
 	l.Logger.Debug("[PROCESSED TEXT]", "Matches Arr", matches)
 
 	str := strings.Join(matches, "m + ")
 	str = fmt.Sprint(str + "m")
 	str = strings.ReplaceAll(str, ":", "h ")
-	
+
 	l.Logger.Debug("New String", "str", str)
-	
 
 	return str
 }
@@ -100,10 +99,14 @@ func calculateTotalSeconds(input string) int64 {
 
 		var seconds int64
 		switch unit {
-		case "d": seconds = val * 86400
-		case "h": seconds = val * 3600
-		case "m": seconds = val * 60
-		case "s": seconds = val
+		case "d":
+			seconds = val * 86400
+		case "h":
+			seconds = val * 3600
+		case "m":
+			seconds = val * 60
+		case "s":
+			seconds = val
 		}
 
 		totalSeconds += (seconds * currentOp)

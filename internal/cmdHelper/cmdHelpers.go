@@ -25,8 +25,7 @@ func GetOsHome() string {
 	return dir
 }
 
-
-func ParseFileLoc(path string, useHomeDir bool) (string) {
+func ParseFileLoc(path string, useHomeDir bool) string {
 	if useHomeDir {
 		homeDir, _ := os.UserHomeDir()
 		return fmt.Sprintf(`%s/%s`, homeDir, path)
@@ -45,7 +44,7 @@ func ExecCommand(progName string, fileLocation string, optionalArgs string) stri
 	fullCommand := fmt.Sprintf("%s %s %s", progName, fileLocation, optionalArgs)
 
 	cmd := exec.Command("sh", "-c", fullCommand)
-	
+
 	l.Logger.Debug("[Full Command]", "cmd", cmd)
 
 	stdoutStderr, err := cmd.CombinedOutput()

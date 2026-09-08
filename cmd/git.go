@@ -58,9 +58,9 @@ func init() {
 func runGitCmd(cmd string) {
 	var sf []byte = ReadOrCreateStorageFile(DefaultStoragePath + DefaultStorageFileName)
 	data := strings.Split(string(sf), "\n")
-	for i := range len(data)-1 {
+	for i := range len(data) - 1 {
 		// git --git-dir /home/hmed42/Work/3-week-plan/.git --work-tree /home/hmed42/Work/3-week-plan/ status
-		compose := fmt.Sprintf("--git-dir %s.git --work-tree %s", data[i],  data[i])
+		compose := fmt.Sprintf("--git-dir %s.git --work-tree %s", data[i], data[i])
 		res := cmdHelper.ExecCommand("git", compose, cmd)
 		l.Logger.Info("[Results]", "for", data[i])
 		fmt.Fprintln(os.Stdout, fmt.Sprint(res))
@@ -69,9 +69,9 @@ func runGitCmd(cmd string) {
 func runGitStatus() {
 	var sf []byte = ReadOrCreateStorageFile(DefaultStoragePath + DefaultStorageFileName)
 	data := strings.Split(string(sf), "\n")
-	for i := range len(data)-1 {
+	for i := range len(data) - 1 {
 		// git --git-dir /home/hmed42/Work/3-week-plan/.git --work-tree /home/hmed42/Work/3-week-plan/ status
-		compose := fmt.Sprintf("--git-dir %s.git --work-tree %s", data[i],  data[i])
+		compose := fmt.Sprintf("--git-dir %s.git --work-tree %s", data[i], data[i])
 		res := cmdHelper.ExecCommand("git", compose, "status --porcelain")
 		l.Logger.Info("[Results]", "for", data[i])
 		fmt.Fprintln(os.Stdout, fmt.Sprint(res))
@@ -93,7 +93,7 @@ func WriteGitShit(filePath string) {
 	l.Debugf("dirs: %v\n", dirs)
 
 	if hasGit(dirs) {
-		data, err := os.ReadFile(DefaultStoragePath+DefaultStorageFileName)
+		data, err := os.ReadFile(DefaultStoragePath + DefaultStorageFileName)
 		currentFile := strings.Split(string(data), "\n")
 		for i := range currentFile {
 			if currentFile[i] == filePath {
@@ -107,7 +107,7 @@ func WriteGitShit(filePath string) {
 		}
 		defer f.Close()
 
-		if _, err := f.WriteString(filePath+"\n"); err != nil {
+		if _, err := f.WriteString(filePath + "\n"); err != nil {
 			l.Fatal("Error while trying to write to storage file", "Error", err)
 		}
 	} else {
@@ -119,19 +119,18 @@ func hasGit(dirs []os.DirEntry) bool {
 	for i := range dirs {
 		if dirs[i].Name() == ".git" {
 			return true
-		} 
+		}
 	}
 	return false
 }
-
 
 func ReadOrCreateStorageFile(filePath string) []byte {
 	texo, err := os.ReadFile(filePath)
 	if err != nil {
 		l.Logger.Warn("Error while trying to read file", "Error", err)
 		l.Logger.Debug("Proceeding to create a file...")
-			
-		tex, erar := os.Create(DefaultStoragePath+DefaultStorageFileName)
+
+		tex, erar := os.Create(DefaultStoragePath + DefaultStorageFileName)
 		if erar != nil {
 			l.Logger.Warn("Error while trying to create file", "Error", erar)
 			l.Logger.Debug("Proceeding to create a directory...")

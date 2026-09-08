@@ -35,7 +35,7 @@ Note: This Command is a WIP, its subcommand git is more functional
 	},
 }
 
-var command []string;
+var command []string
 
 func init() {
 	RootCmd.AddCommand(ContextCmd)

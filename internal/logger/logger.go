@@ -1,7 +1,6 @@
 package logger
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/charmbracelet/lipgloss"
@@ -9,6 +8,7 @@ import (
 )
 
 var Logger *log.Logger
+
 const SepLine string = "===========================================================\n"
 
 func LoggerInit() {
@@ -19,7 +19,6 @@ func LoggerInit() {
 	})
 	Logger.SetLevel(log.InfoLevel)
 	Logger.SetOutput(os.Stderr)
-	
 
 	styles := log.DefaultStyles()
 	styles.Levels[log.FatalLevel] = lipgloss.NewStyle().
@@ -30,7 +29,7 @@ func LoggerInit() {
 	// Add a custom style for key `err`
 	styles.Keys["err"] = lipgloss.NewStyle().Foreground(lipgloss.Color("204")).Italic(true)
 	styles.Values["err"] = lipgloss.NewStyle().Bold(true)
-	
+
 	Logger.SetStyles(styles)
 }
 
@@ -71,31 +70,31 @@ func Print(msg any, keyvals ...any) {
 
 // Debugf prints a debug message with formatting.
 func Debugf(format string, args ...any) {
-	Logger.Debugf(fmt.Sprintf(format, args...))
+	Logger.Debugf(format, args...)
 }
 
 // Infof prints an info message with formatting.
 func Infof(format string, args ...any) {
-	Logger.Infof(fmt.Sprintf(format, args...))
+	Logger.Infof(format, args...)
 }
 
 // Warnf prints a warning message with formatting.
 func Warnf(format string, args ...any) {
-	Logger.Warnf(fmt.Sprintf(format, args...))
+	Logger.Warnf(format, args...)
 }
 
 // Errorf prints an error message with formatting.
 func Errorf(format string, args ...any) {
-	Logger.Errorf(fmt.Sprintf(format, args...))
+	Logger.Errorf(format, args...)
 }
 
 // Fatalf prints a fatal message with formatting and exits.
 func Fatalf(format string, args ...any) {
-	Logger.Fatalf(fmt.Sprintf(format, args...))
+	Logger.Fatalf(format, args...)
 	os.Exit(1)
 }
 
 // Printf prints a message with no level and formatting.
 func Printf(format string, args ...any) {
-	Logger.Printf(fmt.Sprintf(format, args...))
+	Logger.Printf(format, args...)
 }

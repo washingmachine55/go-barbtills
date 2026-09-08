@@ -9,26 +9,56 @@ import (
 	"context"
 	"database/sql"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
-const completedTasks = `-- name: CompletedTasks :many
-SELECT id, task_name, start_time, end_time FROM tasks WHERE end_time IS NOT NULL ORDER BY id
+const archiveSessionBySeq = `-- name: ArchiveSessionBySeq :one
+UPDATE tasks_sessions SET archived_at = now()
+WHERE seq = $1 AND end_time IS NOT NULL AND archived_at IS NULL
+RETURNING id, task_id, start_time, end_time, seq, archived_at
 `
 
-func (q *Queries) CompletedTasks(ctx context.Context) ([]Task, error) {
-	rows, err := q.db.QueryContext(ctx, completedTasks)
+func (q *Queries) ArchiveSessionBySeq(ctx context.Context, seq int64) (TasksSession, error) {
+	row := q.db.QueryRowContext(ctx, archiveSessionBySeq, seq)
+	var i TasksSession
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.StartTime,
+		&i.EndTime,
+		&i.Seq,
+		&i.ArchivedAt,
+	)
+	return i, err
+}
+
+const archiveTaskSessions = `-- name: ArchiveTaskSessions :many
+UPDATE tasks_sessions SET archived_at = now()
+WHERE task_id = $1 AND end_time IS NOT NULL AND archived_at IS NULL
+RETURNING id, task_id, start_time, end_time, seq, archived_at
+`
+
+// Bank every finished session of a task, resetting its running total. A session
+// still open is deliberately left alone so a timer running across the rollover
+// keeps counting into the new period.
+func (q *Queries) ArchiveTaskSessions(ctx context.Context, taskID uuid.UUID) ([]TasksSession, error) {
+	rows, err := q.db.QueryContext(ctx, archiveTaskSessions, taskID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Task
+	var items []TasksSession
 	for rows.Next() {
-		var i Task
+		var i TasksSession
 		if err := rows.Scan(
 			&i.ID,
-			&i.TaskName,
+			&i.TaskID,
 			&i.StartTime,
 			&i.EndTime,
+			&i.Seq,
+			&i.ArchivedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -43,45 +73,144 @@ func (q *Queries) CompletedTasks(ctx context.Context) ([]Task, error) {
 	return items, nil
 }
 
-const createNewTask = `-- name: CreateNewTask :one
-INSERT INTO tasks (task_name, start_time) VALUES ($1, $2) RETURNING id, task_name, start_time, end_time
+const closeOpenSessionForTask = `-- name: CloseOpenSessionForTask :one
+UPDATE tasks_sessions SET end_time = now()
+WHERE task_id = $1 AND end_time IS NULL
+RETURNING id, task_id, start_time, end_time, seq, archived_at
 `
 
-type CreateNewTaskParams struct {
-	TaskName  string
-	StartTime time.Time
-}
-
-func (q *Queries) CreateNewTask(ctx context.Context, arg CreateNewTaskParams) (Task, error) {
-	row := q.db.QueryRowContext(ctx, createNewTask, arg.TaskName, arg.StartTime)
-	var i Task
+func (q *Queries) CloseOpenSessionForTask(ctx context.Context, taskID uuid.UUID) (TasksSession, error) {
+	row := q.db.QueryRowContext(ctx, closeOpenSessionForTask, taskID)
+	var i TasksSession
 	err := row.Scan(
 		&i.ID,
-		&i.TaskName,
+		&i.TaskID,
 		&i.StartTime,
 		&i.EndTime,
+		&i.Seq,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
 
-const runningTasks = `-- name: RunningTasks :many
-SELECT id, task_name, start_time, end_time FROM tasks WHERE end_time IS NULL ORDER BY id
+const closeSessionBySeq = `-- name: CloseSessionBySeq :one
+UPDATE tasks_sessions SET end_time = now()
+WHERE seq = $1 AND end_time IS NULL
+RETURNING id, task_id, start_time, end_time, seq, archived_at
 `
 
-func (q *Queries) RunningTasks(ctx context.Context) ([]Task, error) {
-	rows, err := q.db.QueryContext(ctx, runningTasks)
+func (q *Queries) CloseSessionBySeq(ctx context.Context, seq int64) (TasksSession, error) {
+	row := q.db.QueryRowContext(ctx, closeSessionBySeq, seq)
+	var i TasksSession
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.StartTime,
+		&i.EndTime,
+		&i.Seq,
+		&i.ArchivedAt,
+	)
+	return i, err
+}
+
+const createTask = `-- name: CreateTask :one
+
+INSERT INTO tasks (name, priority, category, type, tags)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, name, status, type, priority, tags, category, seq, is_paused
+`
+
+type CreateTaskParams struct {
+	Name     string
+	Priority TasksPriorities
+	Category []TasksCategories
+	Type     TasksTypes
+	Tags     []string
+}
+
+// ============================================================
+// Tasks: write
+// ============================================================
+func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error) {
+	row := q.db.QueryRowContext(ctx, createTask,
+		arg.Name,
+		arg.Priority,
+		pq.Array(arg.Category),
+		arg.Type,
+		pq.Array(arg.Tags),
+	)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Status,
+		&i.Type,
+		&i.Priority,
+		pq.Array(&i.Tags),
+		pq.Array(&i.Category),
+		&i.Seq,
+		&i.IsPaused,
+	)
+	return i, err
+}
+
+const deleteSessionBySeq = `-- name: DeleteSessionBySeq :execrows
+DELETE FROM tasks_sessions WHERE seq = $1
+`
+
+func (q *Queries) DeleteSessionBySeq(ctx context.Context, seq int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteSessionBySeq, seq)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteTask = `-- name: DeleteTask :execrows
+DELETE FROM tasks WHERE id = $1
+`
+
+func (q *Queries) DeleteTask(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTask, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const findInconsistentTasks = `-- name: FindInconsistentTasks :many
+SELECT t.seq, t.name, t.status,
+       COUNT(s.id) FILTER (WHERE s.end_time IS NULL) AS open_sessions
+FROM tasks t
+LEFT JOIN tasks_sessions s ON s.task_id = t.id
+GROUP BY t.id
+HAVING (t.status = 'In Progress' AND COUNT(s.id) FILTER (WHERE s.end_time IS NULL) = 0)
+    OR (t.status <> 'In Progress' AND COUNT(s.id) FILTER (WHERE s.end_time IS NULL) > 0)
+ORDER BY t.seq
+`
+
+type FindInconsistentTasksRow struct {
+	Seq          int64
+	Name         string
+	Status       TasksStatuses
+	OpenSessions int64
+}
+
+// Cross-row invariants a CHECK cannot express. Backs `tasks doctor`.
+func (q *Queries) FindInconsistentTasks(ctx context.Context) ([]FindInconsistentTasksRow, error) {
+	rows, err := q.db.QueryContext(ctx, findInconsistentTasks)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Task
+	var items []FindInconsistentTasksRow
 	for rows.Next() {
-		var i Task
+		var i FindInconsistentTasksRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.TaskName,
-			&i.StartTime,
-			&i.EndTime,
+			&i.Seq,
+			&i.Name,
+			&i.Status,
+			&i.OpenSessions,
 		); err != nil {
 			return nil, err
 		}
@@ -96,48 +225,566 @@ func (q *Queries) RunningTasks(ctx context.Context) ([]Task, error) {
 	return items, nil
 }
 
-const showSpecificTimer = `-- name: ShowSpecificTimer :one
-SELECT id, task_name, start_time, end_time FROM tasks WHERE id = $1
+const getOpenSessionForTask = `-- name: GetOpenSessionForTask :one
+SELECT id, task_id, start_time, end_time, seq, archived_at
+FROM tasks_sessions
+WHERE task_id = $1 AND end_time IS NULL
 `
 
-func (q *Queries) ShowSpecificTimer(ctx context.Context, id int32) (Task, error) {
-	row := q.db.QueryRowContext(ctx, showSpecificTimer, id)
-	var i Task
+func (q *Queries) GetOpenSessionForTask(ctx context.Context, taskID uuid.UUID) (TasksSession, error) {
+	row := q.db.QueryRowContext(ctx, getOpenSessionForTask, taskID)
+	var i TasksSession
 	err := row.Scan(
 		&i.ID,
-		&i.TaskName,
+		&i.TaskID,
 		&i.StartTime,
 		&i.EndTime,
+		&i.Seq,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
 
-const truncateTasks = `-- name: TruncateTasks :exec
-TRUNCATE TABLE tasks RESTART IDENTITY CASCADE
+const getSessionBySeq = `-- name: GetSessionBySeq :one
+SELECT id, task_id, start_time, end_time, seq, archived_at
+FROM tasks_sessions
+WHERE seq = $1
 `
 
-func (q *Queries) TruncateTasks(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, truncateTasks)
+func (q *Queries) GetSessionBySeq(ctx context.Context, seq int64) (TasksSession, error) {
+	row := q.db.QueryRowContext(ctx, getSessionBySeq, seq)
+	var i TasksSession
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.StartTime,
+		&i.EndTime,
+		&i.Seq,
+		&i.ArchivedAt,
+	)
+	return i, err
+}
+
+const getTaskByID = `-- name: GetTaskByID :one
+SELECT id, name, status, type, priority, tags, category, seq, is_paused
+FROM tasks
+WHERE id = $1
+`
+
+func (q *Queries) GetTaskByID(ctx context.Context, id uuid.UUID) (Task, error) {
+	row := q.db.QueryRowContext(ctx, getTaskByID, id)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Status,
+		&i.Type,
+		&i.Priority,
+		pq.Array(&i.Tags),
+		pq.Array(&i.Category),
+		&i.Seq,
+		&i.IsPaused,
+	)
+	return i, err
+}
+
+const getTaskByName = `-- name: GetTaskByName :one
+
+SELECT id, name, status, type, priority, tags, category, seq, is_paused
+FROM tasks
+WHERE lower(name) = lower($1)
+`
+
+// ============================================================
+// Task resolution. A task is addressed by name (case-insensitive,
+// the primary human handle), by seq (short permanent number), or
+// by uuid (scripting only).
+// ============================================================
+func (q *Queries) GetTaskByName(ctx context.Context, name string) (Task, error) {
+	row := q.db.QueryRowContext(ctx, getTaskByName, name)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Status,
+		&i.Type,
+		&i.Priority,
+		pq.Array(&i.Tags),
+		pq.Array(&i.Category),
+		&i.Seq,
+		&i.IsPaused,
+	)
+	return i, err
+}
+
+const getTaskBySeq = `-- name: GetTaskBySeq :one
+SELECT id, name, status, type, priority, tags, category, seq, is_paused
+FROM tasks
+WHERE seq = $1
+`
+
+func (q *Queries) GetTaskBySeq(ctx context.Context, seq int64) (Task, error) {
+	row := q.db.QueryRowContext(ctx, getTaskBySeq, seq)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Status,
+		&i.Type,
+		&i.Priority,
+		pq.Array(&i.Tags),
+		pq.Array(&i.Category),
+		&i.Seq,
+		&i.IsPaused,
+	)
+	return i, err
+}
+
+const listSessionsForTask = `-- name: ListSessionsForTask :many
+SELECT s.id, s.seq, s.task_id, s.start_time, s.end_time, s.archived_at,
+       (s.end_time IS NULL) AS is_open,
+       EXTRACT(EPOCH FROM (COALESCE(s.end_time, now()) - s.start_time))::bigint AS duration_seconds
+FROM tasks_sessions s
+WHERE s.task_id = $1
+  AND ($2::boolean IS TRUE OR s.archived_at IS NULL)
+ORDER BY s.start_time DESC, s.seq DESC
+`
+
+type ListSessionsForTaskParams struct {
+	TaskID          uuid.UUID
+	IncludeArchived sql.NullBool
+}
+
+type ListSessionsForTaskRow struct {
+	ID              uuid.UUID
+	Seq             int64
+	TaskID          uuid.UUID
+	StartTime       time.Time
+	EndTime         sql.NullTime
+	ArchivedAt      sql.NullTime
+	IsOpen          sql.NullBool
+	DurationSeconds int64
+}
+
+func (q *Queries) ListSessionsForTask(ctx context.Context, arg ListSessionsForTaskParams) ([]ListSessionsForTaskRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionsForTask, arg.TaskID, arg.IncludeArchived)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSessionsForTaskRow
+	for rows.Next() {
+		var i ListSessionsForTaskRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Seq,
+			&i.TaskID,
+			&i.StartTime,
+			&i.EndTime,
+			&i.ArchivedAt,
+			&i.IsOpen,
+			&i.DurationSeconds,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTasks = `-- name: ListTasks :many
+
+SELECT
+    t.id, t.seq, t.name, t.status, t.is_paused, t.type, t.priority, t.tags, t.category,
+    COUNT(s.id) FILTER (WHERE s.archived_at IS NULL) AS session_count,
+    COUNT(s.id) FILTER (WHERE s.archived_at IS NOT NULL) AS archived_session_count,
+    COALESCE(
+        SUM(EXTRACT(EPOCH FROM (s.end_time - s.start_time)))
+            FILTER (WHERE s.end_time IS NOT NULL AND s.archived_at IS NULL),
+        0
+    )::bigint AS closed_seconds,
+    COALESCE(
+        SUM(EXTRACT(EPOCH FROM (s.end_time - s.start_time)))
+            FILTER (WHERE s.archived_at IS NOT NULL),
+        0
+    )::bigint AS archived_seconds,
+    CASE WHEN COUNT(s.id) FILTER (WHERE s.end_time IS NULL) = 0
+         THEN NULL ELSE MAX(s.start_time) FILTER (WHERE s.end_time IS NULL)
+    END AS open_started_at,
+    CASE WHEN COUNT(s.id) FILTER (WHERE s.end_time IS NULL) = 0
+         THEN NULL ELSE MAX(s.seq) FILTER (WHERE s.end_time IS NULL)
+    END AS open_session_seq,
+    CASE WHEN COUNT(s.id) FILTER (WHERE s.archived_at IS NULL) = 0
+         THEN NULL ELSE MIN(s.start_time) FILTER (WHERE s.archived_at IS NULL)
+    END AS first_started_at,
+    CASE WHEN COUNT(s.id) FILTER (WHERE s.end_time IS NULL) > 0
+         THEN NULL ELSE MAX(s.end_time) FILTER (WHERE s.archived_at IS NULL)
+    END AS last_ended_at
+FROM tasks t
+LEFT JOIN tasks_sessions s ON s.task_id = t.id
+WHERE ($1::bigint IS NULL OR t.seq = $1::bigint)
+  AND ($2::tasks_statuses IS NULL OR t.status = $2::tasks_statuses)
+  AND ($3::text IS NULL OR t.name ILIKE '%' || $3::text || '%')
+GROUP BY t.id
+HAVING ($4::boolean IS NOT TRUE
+        OR COUNT(s.id) FILTER (WHERE s.end_time IS NULL) > 0)
+ORDER BY t.seq
+`
+
+type ListTasksParams struct {
+	Seq      sql.NullInt64
+	Status   NullTasksStatuses
+	NameLike sql.NullString
+	OnlyOpen sql.NullBool
+}
+
+type ListTasksRow struct {
+	ID                   uuid.UUID
+	Seq                  int64
+	Name                 string
+	Status               TasksStatuses
+	IsPaused             bool
+	Type                 TasksTypes
+	Priority             TasksPriorities
+	Tags                 []string
+	Category             []TasksCategories
+	SessionCount         int64
+	ArchivedSessionCount int64
+	ClosedSeconds        int64
+	ArchivedSeconds      int64
+	OpenStartedAt        sql.NullTime
+	OpenSessionSeq       sql.NullInt64
+	FirstStartedAt       sql.NullTime
+	LastEndedAt          sql.NullTime
+}
+
+// ============================================================
+// Tasks: the one list query. Serves list, status filter, name
+// search and single-task detail.
+//
+// LEFT JOIN so a task with no sessions still appears.
+// Overall task time is the SUM of session durations, never
+// MAX(end)-MIN(start): that span only equals the sum when a task
+// has exactly one session, which pausing makes impossible.
+// closed_seconds covers finished sessions only; the live portion
+// of the open one is added client-side from open_started_at, so
+// the TUI can tick every second without querying.
+//
+// Every possibly-NULL output uses CASE WHEN <guard> THEN NULL so
+// sqlc emits sql.NullTime / sql.NullInt64 rather than a bare
+// time.Time that panics on scan.
+// ============================================================
+func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]ListTasksRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTasks,
+		arg.Seq,
+		arg.Status,
+		arg.NameLike,
+		arg.OnlyOpen,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTasksRow
+	for rows.Next() {
+		var i ListTasksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Seq,
+			&i.Name,
+			&i.Status,
+			&i.IsPaused,
+			&i.Type,
+			&i.Priority,
+			pq.Array(&i.Tags),
+			pq.Array(&i.Category),
+			&i.SessionCount,
+			&i.ArchivedSessionCount,
+			&i.ClosedSeconds,
+			&i.ArchivedSeconds,
+			&i.OpenStartedAt,
+			&i.OpenSessionSeq,
+			&i.FirstStartedAt,
+			&i.LastEndedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const openSession = `-- name: OpenSession :one
+
+INSERT INTO tasks_sessions (task_id) VALUES ($1)
+RETURNING id, task_id, start_time, end_time, seq, archived_at
+`
+
+// ============================================================
+// Sessions
+// ============================================================
+func (q *Queries) OpenSession(ctx context.Context, taskID uuid.UUID) (TasksSession, error) {
+	row := q.db.QueryRowContext(ctx, openSession, taskID)
+	var i TasksSession
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.StartTime,
+		&i.EndTime,
+		&i.Seq,
+		&i.ArchivedAt,
+	)
+	return i, err
+}
+
+const renameTask = `-- name: RenameTask :one
+UPDATE tasks SET name = $1
+WHERE id = $2
+RETURNING id, name, status, type, priority, tags, category, seq, is_paused
+`
+
+type RenameTaskParams struct {
+	Name string
+	ID   uuid.UUID
+}
+
+func (q *Queries) RenameTask(ctx context.Context, arg RenameTaskParams) (Task, error) {
+	row := q.db.QueryRowContext(ctx, renameTask, arg.Name, arg.ID)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Status,
+		&i.Type,
+		&i.Priority,
+		pq.Array(&i.Tags),
+		pq.Array(&i.Category),
+		&i.Seq,
+		&i.IsPaused,
+	)
+	return i, err
+}
+
+const setSessionTimes = `-- name: SetSessionTimes :one
+UPDATE tasks_sessions
+SET start_time = COALESCE($1, start_time),
+    end_time   = CASE WHEN $2::boolean THEN NULL
+                      ELSE COALESCE($3, end_time) END
+WHERE seq = $4
+RETURNING id, task_id, start_time, end_time, seq, archived_at
+`
+
+type SetSessionTimesParams struct {
+	StartTime    sql.NullTime
+	ClearEndTime bool
+	EndTime      sql.NullTime
+	Seq          int64
+}
+
+func (q *Queries) SetSessionTimes(ctx context.Context, arg SetSessionTimesParams) (TasksSession, error) {
+	row := q.db.QueryRowContext(ctx, setSessionTimes,
+		arg.StartTime,
+		arg.ClearEndTime,
+		arg.EndTime,
+		arg.Seq,
+	)
+	var i TasksSession
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.StartTime,
+		&i.EndTime,
+		&i.Seq,
+		&i.ArchivedAt,
+	)
+	return i, err
+}
+
+const setTaskStatus = `-- name: SetTaskStatus :one
+UPDATE tasks SET status = $1
+WHERE id = $2
+RETURNING id, name, status, type, priority, tags, category, seq, is_paused
+`
+
+type SetTaskStatusParams struct {
+	Status TasksStatuses
+	ID     uuid.UUID
+}
+
+func (q *Queries) SetTaskStatus(ctx context.Context, arg SetTaskStatusParams) (Task, error) {
+	row := q.db.QueryRowContext(ctx, setTaskStatus, arg.Status, arg.ID)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Status,
+		&i.Type,
+		&i.Priority,
+		pq.Array(&i.Tags),
+		pq.Array(&i.Category),
+		&i.Seq,
+		&i.IsPaused,
+	)
+	return i, err
+}
+
+const taskDuration = `-- name: TaskDuration :one
+SELECT
+    COUNT(*) FILTER (WHERE s.archived_at IS NULL) AS session_count,
+    COUNT(*) FILTER (WHERE s.end_time IS NULL) AS open_session_count,
+    COUNT(*) FILTER (WHERE s.archived_at IS NOT NULL) AS archived_session_count,
+    COALESCE(SUM(EXTRACT(EPOCH FROM (s.end_time - s.start_time)))
+             FILTER (WHERE s.end_time IS NOT NULL AND s.archived_at IS NULL), 0)::bigint AS closed_seconds,
+    COALESCE(SUM(EXTRACT(EPOCH FROM (now() - s.start_time)))
+             FILTER (WHERE s.end_time IS NULL), 0)::bigint AS open_seconds,
+    COALESCE(SUM(EXTRACT(EPOCH FROM (s.end_time - s.start_time)))
+             FILTER (WHERE s.archived_at IS NOT NULL), 0)::bigint AS archived_seconds
+FROM tasks_sessions s
+WHERE s.task_id = $1
+`
+
+type TaskDurationRow struct {
+	SessionCount         int64
+	OpenSessionCount     int64
+	ArchivedSessionCount int64
+	ClosedSeconds        int64
+	OpenSeconds          int64
+	ArchivedSeconds      int64
+}
+
+func (q *Queries) TaskDuration(ctx context.Context, taskID uuid.UUID) (TaskDurationRow, error) {
+	row := q.db.QueryRowContext(ctx, taskDuration, taskID)
+	var i TaskDurationRow
+	err := row.Scan(
+		&i.SessionCount,
+		&i.OpenSessionCount,
+		&i.ArchivedSessionCount,
+		&i.ClosedSeconds,
+		&i.OpenSeconds,
+		&i.ArchivedSeconds,
+	)
+	return i, err
+}
+
+const truncateAllTaskData = `-- name: TruncateAllTaskData :exec
+
+TRUNCATE TABLE tasks_sessions, tasks RESTART IDENTITY
+`
+
+// ============================================================
+// Admin
+// ============================================================
+func (q *Queries) TruncateAllTaskData(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, truncateAllTaskData)
 	return err
 }
 
-const updateSelectedTask = `-- name: UpdateSelectedTask :one
-UPDATE tasks SET end_time = $1 WHERE id = $2 AND end_time IS null RETURNING id, task_name, start_time, end_time
+const unarchiveSessionBySeq = `-- name: UnarchiveSessionBySeq :one
+UPDATE tasks_sessions SET archived_at = NULL
+WHERE seq = $1 AND archived_at IS NOT NULL
+RETURNING id, task_id, start_time, end_time, seq, archived_at
 `
 
-type UpdateSelectedTaskParams struct {
-	EndTime sql.NullTime
-	ID      int32
+func (q *Queries) UnarchiveSessionBySeq(ctx context.Context, seq int64) (TasksSession, error) {
+	row := q.db.QueryRowContext(ctx, unarchiveSessionBySeq, seq)
+	var i TasksSession
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.StartTime,
+		&i.EndTime,
+		&i.Seq,
+		&i.ArchivedAt,
+	)
+	return i, err
 }
 
-func (q *Queries) UpdateSelectedTask(ctx context.Context, arg UpdateSelectedTaskParams) (Task, error) {
-	row := q.db.QueryRowContext(ctx, updateSelectedTask, arg.EndTime, arg.ID)
+const unarchiveTaskSessions = `-- name: UnarchiveTaskSessions :many
+UPDATE tasks_sessions SET archived_at = NULL
+WHERE task_id = $1 AND archived_at IS NOT NULL
+RETURNING id, task_id, start_time, end_time, seq, archived_at
+`
+
+// Undo a rollover: bring every archived session of a task back into the total.
+func (q *Queries) UnarchiveTaskSessions(ctx context.Context, taskID uuid.UUID) ([]TasksSession, error) {
+	rows, err := q.db.QueryContext(ctx, unarchiveTaskSessions, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TasksSession
+	for rows.Next() {
+		var i TasksSession
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.StartTime,
+			&i.EndTime,
+			&i.Seq,
+			&i.ArchivedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateTaskMeta = `-- name: UpdateTaskMeta :one
+UPDATE tasks
+SET priority = COALESCE($1, priority),
+    type     = COALESCE($2,     type),
+    tags     = COALESCE($3,     tags),
+    category = COALESCE($4, category)
+WHERE id = $5
+RETURNING id, name, status, type, priority, tags, category, seq, is_paused
+`
+
+type UpdateTaskMetaParams struct {
+	Priority NullTasksPriorities
+	Type     NullTasksTypes
+	Tags     []string
+	Category []TasksCategories
+	ID       uuid.UUID
+}
+
+func (q *Queries) UpdateTaskMeta(ctx context.Context, arg UpdateTaskMetaParams) (Task, error) {
+	row := q.db.QueryRowContext(ctx, updateTaskMeta,
+		arg.Priority,
+		arg.Type,
+		pq.Array(arg.Tags),
+		pq.Array(arg.Category),
+		arg.ID,
+	)
 	var i Task
 	err := row.Scan(
 		&i.ID,
-		&i.TaskName,
-		&i.StartTime,
-		&i.EndTime,
+		&i.Name,
+		&i.Status,
+		&i.Type,
+		&i.Priority,
+		pq.Array(&i.Tags),
+		pq.Array(&i.Category),
+		&i.Seq,
+		&i.IsPaused,
 	)
 	return i, err
 }

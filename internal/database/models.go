@@ -6,12 +6,208 @@ package database
 
 import (
 	"database/sql"
+	"database/sql/driver"
+	"fmt"
 	"time"
+
+	"github.com/google/uuid"
 )
 
+type TasksCategories string
+
+const (
+	TasksCategoriesUnknown         TasksCategories = "Unknown"
+	TasksCategoriesClientProject   TasksCategories = "Client Project"
+	TasksCategoriesPersonalProject TasksCategories = "Personal Project"
+	TasksCategoriesTroubleshooting TasksCategories = "Troubleshooting"
+	TasksCategoriesRoutine         TasksCategories = "Routine"
+)
+
+func (e *TasksCategories) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TasksCategories(s)
+	case string:
+		*e = TasksCategories(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TasksCategories: %T", src)
+	}
+	return nil
+}
+
+type NullTasksCategories struct {
+	TasksCategories TasksCategories
+	Valid           bool // Valid is true if TasksCategories is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTasksCategories) Scan(value interface{}) error {
+	if value == nil {
+		ns.TasksCategories, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TasksCategories.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTasksCategories) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TasksCategories), nil
+}
+
+type TasksPriorities string
+
+const (
+	TasksPrioritiesUnknown  TasksPriorities = "Unknown"
+	TasksPrioritiesVeryLow  TasksPriorities = "Very Low"
+	TasksPrioritiesLow      TasksPriorities = "Low"
+	TasksPrioritiesMedium   TasksPriorities = "Medium"
+	TasksPrioritiesHigh     TasksPriorities = "High"
+	TasksPrioritiesVeryHigh TasksPriorities = "Very High"
+)
+
+func (e *TasksPriorities) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TasksPriorities(s)
+	case string:
+		*e = TasksPriorities(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TasksPriorities: %T", src)
+	}
+	return nil
+}
+
+type NullTasksPriorities struct {
+	TasksPriorities TasksPriorities
+	Valid           bool // Valid is true if TasksPriorities is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTasksPriorities) Scan(value interface{}) error {
+	if value == nil {
+		ns.TasksPriorities, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TasksPriorities.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTasksPriorities) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TasksPriorities), nil
+}
+
+type TasksStatuses string
+
+const (
+	TasksStatusesPending    TasksStatuses = "Pending"
+	TasksStatusesInProgress TasksStatuses = "In Progress"
+	TasksStatusesCompleted  TasksStatuses = "Completed"
+	TasksStatusesPaused     TasksStatuses = "Paused"
+	TasksStatusesArchived   TasksStatuses = "Archived"
+)
+
+func (e *TasksStatuses) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TasksStatuses(s)
+	case string:
+		*e = TasksStatuses(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TasksStatuses: %T", src)
+	}
+	return nil
+}
+
+type NullTasksStatuses struct {
+	TasksStatuses TasksStatuses
+	Valid         bool // Valid is true if TasksStatuses is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTasksStatuses) Scan(value interface{}) error {
+	if value == nil {
+		ns.TasksStatuses, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TasksStatuses.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTasksStatuses) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TasksStatuses), nil
+}
+
+type TasksTypes string
+
+const (
+	TasksTypesRecurring TasksTypes = "Recurring"
+	TasksTypesOneTime   TasksTypes = "One Time"
+)
+
+func (e *TasksTypes) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TasksTypes(s)
+	case string:
+		*e = TasksTypes(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TasksTypes: %T", src)
+	}
+	return nil
+}
+
+type NullTasksTypes struct {
+	TasksTypes TasksTypes
+	Valid      bool // Valid is true if TasksTypes is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTasksTypes) Scan(value interface{}) error {
+	if value == nil {
+		ns.TasksTypes, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TasksTypes.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTasksTypes) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TasksTypes), nil
+}
+
 type Task struct {
-	ID        int32
-	TaskName  string
-	StartTime time.Time
-	EndTime   sql.NullTime
+	ID       uuid.UUID
+	Name     string
+	Status   TasksStatuses
+	Type     TasksTypes
+	Priority TasksPriorities
+	Tags     []string
+	Category []TasksCategories
+	Seq      int64
+	IsPaused bool
+}
+
+type TasksSession struct {
+	ID         uuid.UUID
+	TaskID     uuid.UUID
+	StartTime  time.Time
+	EndTime    sql.NullTime
+	Seq        int64
+	ArchivedAt sql.NullTime
 }
