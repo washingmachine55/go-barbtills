@@ -29,7 +29,16 @@ var asciiCmd = &cobra.Command{
 		}
 		if asciiOptsHelp != false {
 			l.Logger.Info("Available options are: ")
-			printFontTable()
+			if jsonEnabled {
+				emitJSON(map[string]any{
+					"font_files": figure.AssetNames(),
+				})
+			} else {
+				printFontTable()
+			}
+		}
+		if asciiOptsAdditional {
+			findAdditionalFonts()
 		}
 		val := asciiArt
 		if val == "-" {
@@ -49,6 +58,7 @@ func init() {
 	asciiCmd.Flags().StringVar(&asciiArt, "message", "", "String to convert to ASCII Art (use '-' for stdin if piping into this)")
 	asciiCmd.Flags().StringVarP(&asciiOpts, "opts", "o", "slant", "Font Option to use for ASCII art generation")
 	asciiCmd.Flags().BoolVar(&asciiOptsHelp, "opts-help", false, "Prints all available options for ASCII art fonts")
+	asciiCmd.Flags().BoolVar(&asciiOptsAdditional, "additional", false, "Prints all additional available options for ASCII art fonts")
 
 	// Here you will define your flags and configuration settings.
 
@@ -108,4 +118,25 @@ func printFontTable() {
 	}
 
 	w.Flush()
+}
+
+func findAdditionalFonts(dir string) {
+	var availableFonts []os.DirEntry
+	if dir != "" {
+		if availableFonts, err := os.ReadDir("/usr/share/figlet/"); err != nil {
+			return
+		}
+	}
+	if err != nil {
+		l.Fatalf("error in finding additonal fonts: %w", err)
+	}
+	var fontNames []string
+	for _, v := range availableFonts {
+		fontNames = append(fontNames, strings.TrimSpace(v.Name()))
+	}
+	if jsonEnabled {
+		emitJSON(map[string]any{
+			"available_fonts": fontNames,
+		})
+	}
 }

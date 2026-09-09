@@ -28,9 +28,10 @@ var cfgFile string = DefaultConfigPath
 var jsonEnabled bool
 
 var (
-	asciiArt      string
-	asciiOpts     string
-	asciiOptsHelp bool
+	asciiArt            string
+	asciiOpts           string
+	asciiOptsHelp       bool
+	asciiOptsAdditional bool
 )
 
 // RootCmd represents the base command when called without any subcommands
