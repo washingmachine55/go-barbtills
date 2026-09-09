@@ -6,11 +6,11 @@ package cmd
 import (
 	cmdHelper "barbtils/internal/cmdHelper"
 	l "barbtils/internal/logger"
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	_ "github.com/lib/pq"
 	"github.com/spf13/cobra"
@@ -25,6 +25,7 @@ var DefaultStoragePath string = cmdHelper.OSHostName + "/.local/share/barbtils/"
 const DefaultStorageFileName string = "gitshit"
 
 var cfgFile string = DefaultConfigPath
+var jsonEnabled bool
 
 var (
 	asciiArt      string
@@ -60,39 +61,57 @@ Use this at your own risk lol.`,
 		}
 	},
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		// Debug first: it sets a human clock format that --json then replaces with
+		// RFC3339, so `-d -j` still emits timestamps a parser accepts.
 		debug, _ := cmd.Flags().GetBool("debug")
 		if debug {
 			l.LoggerSetLevelDebug()
+		}
+		json, _ := cmd.Flags().GetBool("json")
+		if json {
+			jsonEnabled = true
+			l.LoggerSetOutputJson()
+		}
+		if debug {
+			// Announced only once the formatter is settled, so the first debug
+			// line is not the one line of plain text in a JSON stream.
 			l.Logger.Debug("Logger Set to Debug")
 		}
 		initConfig()
-		// Only the root command (no subcommand) inherits this timeout; avoids killing `tasks` and others.
-		if cmd.Parent() != nil {
-			return
-		}
-		streamC, _ := streamTextCmd.Flags().GetBool("serve")
-		interactive, _ := tasksCmd.Flags().GetBool("interactive")
-		if !interactive || !streamC {
-			go func() {
-				time.Sleep(5 * time.Second)
-				fmt.Fprintln(os.Stderr, "Error: Command timed out!")
-				os.Exit(1)
-			}()
-		}
 	},
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
-	err := RootCmd.Execute()
 	signal.Ignore(syscall.SIGPIPE)
-	if err != nil {
+
+	// Ctrl-C cancels the command context, so in-flight queries and the TUI
+	// unwind instead of being killed mid-write.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := RootCmd.ExecuteContext(ctx); err != nil {
+		// Cobra's own error print is silenced (see init), so that --json can
+		// answer with a parseable failure instead of a bare sentence. It goes to
+		// stderr either way, leaving stdout to hold only the command's document.
+		if jsonEnabled {
+			_ = encodeJSON(os.Stderr, map[string]any{"error": err.Error()})
+		} else {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+		}
 		os.Exit(1)
 	}
 }
 
 func init() {
+	// Cobra prints the full usage block on any RunE error unless both the
+	// executed command and the root silence it. A failed action is not a usage
+	// mistake, so the message should stand alone.
+	RootCmd.SilenceUsage = true
+	// Execute() prints the error itself, so it can be JSON when --json is set.
+	RootCmd.SilenceErrors = true
+
 	cobra.OnInitialize(l.LoggerInit)
 	// cobra.OnInitialize(initDB)
 
@@ -102,6 +121,7 @@ func init() {
 
 	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", DefaultConfigPath, "config file path")
 	RootCmd.PersistentFlags().BoolP("debug", "d", false, "Set Log level to debug. Can be used with any command and subcommands")
+	RootCmd.PersistentFlags().BoolVarP(&jsonEnabled, "json", "j", false, "Emit machine-readable JSON: command output on stdout, logs and errors as JSON on stderr. Can be used with any command and subcommands")
 	RootCmd.PersistentFlags().BoolP("version", "v", false, "Print app version")
 
 	// Cobra also supports local flags, which will only run

@@ -1,8 +1,11 @@
 version: "2"
 
+# Connection used only to host sqlc's ephemeral "managed" databases, which it
+# builds by replaying database/migrations. Deliberately NOT the working
+# database: a misconfigured servers block makes sqlc operate on it directly.
 servers:
     - engine: postgresql
-      uri: "postgresql://postgres@localhost:5432/timesheet_helper?sslmode=disable"
+      uri: "postgresql://postgres@localhost:5432/postgres?sslmode=disable"
 sql:
     - engine: "postgresql"
       schema: "database/migrations"

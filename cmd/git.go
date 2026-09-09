@@ -58,24 +58,91 @@ func init() {
 func runGitCmd(cmd string) {
 	var sf []byte = ReadOrCreateStorageFile(DefaultStoragePath + DefaultStorageFileName)
 	data := strings.Split(string(sf), "\n")
-	for i := range len(data)-1 {
+	for i := range len(data) - 1 {
 		// git --git-dir /home/hmed42/Work/3-week-plan/.git --work-tree /home/hmed42/Work/3-week-plan/ status
-		compose := fmt.Sprintf("--git-dir %s.git --work-tree %s", data[i],  data[i])
+		compose := fmt.Sprintf("--git-dir %s.git --work-tree %s", data[i], data[i])
 		res := cmdHelper.ExecCommand("git", compose, cmd)
 		l.Logger.Info("[Results]", "for", data[i])
 		fmt.Fprintln(os.Stdout, fmt.Sprint(res))
 	}
 }
+
+// gitRepoStatus is one repo's porcelain status, grouped by what happened to
+// each file.
+type gitRepoStatus struct {
+	Path      string   `json:"path"`
+	RepoName  string   `json:"repo_name"`
+	Modified  []string `json:"modified"`
+	Untracked []string `json:"untracked"`
+	Added     []string `json:"added"`
+	Deleted   []string `json:"deleted"`
+}
+
 func runGitStatus() {
 	var sf []byte = ReadOrCreateStorageFile(DefaultStoragePath + DefaultStorageFileName)
 	data := strings.Split(string(sf), "\n")
-	for i := range len(data)-1 {
-		// git --git-dir /home/hmed42/Work/3-week-plan/.git --work-tree /home/hmed42/Work/3-week-plan/ status
-		compose := fmt.Sprintf("--git-dir %s.git --work-tree %s", data[i],  data[i])
+	repos := make([]gitRepoStatus, 0, max(len(data)-1, 0))
+	for i := range len(data) - 1 {
+		compose := fmt.Sprintf("--git-dir %s.git --work-tree %s", data[i], data[i])
 		res := cmdHelper.ExecCommand("git", compose, "status --porcelain")
-		l.Logger.Info("[Results]", "for", data[i])
-		fmt.Fprintln(os.Stdout, fmt.Sprint(res))
+		repos = append(repos, parseGitStatus(data[i], res))
 	}
+
+	// JSON goes to stdout as one document, so `barbtils context git -s -j | jq`
+	// needs no 2>&1 and never has a log line spliced into it.
+	if jsonEnabled {
+		if err := emitJSON(map[string]any{
+			"repos": repos,
+			"count": len(repos),
+		}); err != nil {
+			l.Logger.Fatal("Error while writing JSON output", "Error", err)
+		}
+		return
+	}
+
+	for _, r := range repos {
+		l.Logger.Info(
+			"[Results]",
+			"path", r.Path,
+			"repo_name", r.RepoName,
+			"modified", r.Modified,
+			"untracked", r.Untracked,
+			"added", r.Added,
+			"deleted", r.Deleted,
+		)
+	}
+}
+
+// parseGitStatus groups the lines of `git status --porcelain` by change type.
+// Empty groups stay as [], so a JSON consumer can iterate them unconditionally.
+func parseGitStatus(path, porcelain string) gitRepoStatus {
+	repoName := path
+	if dirs := strings.Split(path, "/"); len(dirs) >= 2 {
+		repoName = dirs[len(dirs)-2]
+	}
+
+	status := gitRepoStatus{
+		Path:      path,
+		RepoName:  repoName,
+		Modified:  []string{},
+		Untracked: []string{},
+		Added:     []string{},
+		Deleted:   []string{},
+	}
+	for _, line := range strings.Split(porcelain, "\n") {
+		entry := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(entry, "??"):
+			status.Untracked = append(status.Untracked, strings.Trim(entry, "?? "))
+		case strings.HasPrefix(entry, "M"):
+			status.Modified = append(status.Modified, strings.Trim(entry, " M "))
+		case strings.HasPrefix(entry, "A"):
+			status.Added = append(status.Added, strings.Trim(entry, " A "))
+		case strings.HasPrefix(entry, "D"):
+			status.Deleted = append(status.Deleted, strings.Trim(entry, " D "))
+		}
+	}
+	return status
 }
 
 func WriteGitShit(filePath string) {
@@ -93,7 +160,7 @@ func WriteGitShit(filePath string) {
 	l.Debugf("dirs: %v\n", dirs)
 
 	if hasGit(dirs) {
-		data, err := os.ReadFile(DefaultStoragePath+DefaultStorageFileName)
+		data, err := os.ReadFile(DefaultStoragePath + DefaultStorageFileName)
 		currentFile := strings.Split(string(data), "\n")
 		for i := range currentFile {
 			if currentFile[i] == filePath {
@@ -107,7 +174,7 @@ func WriteGitShit(filePath string) {
 		}
 		defer f.Close()
 
-		if _, err := f.WriteString(filePath+"\n"); err != nil {
+		if _, err := f.WriteString(filePath + "\n"); err != nil {
 			l.Fatal("Error while trying to write to storage file", "Error", err)
 		}
 	} else {
@@ -119,21 +186,20 @@ func hasGit(dirs []os.DirEntry) bool {
 	for i := range dirs {
 		if dirs[i].Name() == ".git" {
 			return true
-		} 
+		}
 	}
 	return false
 }
 
-
 func ReadOrCreateStorageFile(filePath string) []byte {
-	texo, err := os.ReadFile(filePath)
+	storageTextFile, err := os.ReadFile(filePath)
 	if err != nil {
 		l.Logger.Warn("Error while trying to read file", "Error", err)
 		l.Logger.Debug("Proceeding to create a file...")
-			
-		tex, erar := os.Create(DefaultStoragePath+DefaultStorageFileName)
-		if erar != nil {
-			l.Logger.Warn("Error while trying to create file", "Error", erar)
+
+		createStorageTextFile, err := os.Create(DefaultStoragePath + DefaultStorageFileName)
+		if err != nil {
+			l.Logger.Warn("Error while trying to create file", "Error", err)
 			l.Logger.Debug("Proceeding to create a directory...")
 
 			errMkDir := os.MkdirAll(DefaultStoragePath, 0755)
@@ -141,7 +207,7 @@ func ReadOrCreateStorageFile(filePath string) []byte {
 				l.Logger.Fatal("Error while trying to create a directory", "Error", errMkDir)
 			}
 		}
-		tex.Close()
+		createStorageTextFile.Close()
 	}
-	return texo
+	return storageTextFile
 }

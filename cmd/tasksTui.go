@@ -1,225 +1,558 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
-	"database/sql"
 	"fmt"
-	"slices"
-	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
+
+	"barbtils/internal/database"
+	"barbtils/internal/tasks"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/google/uuid"
 )
 
-type tuiPhase uint8
+type tuiView uint8
 
 const (
-	tuiPhaseMenu tuiPhase = iota
-	tuiPhaseInput
-	tuiPhaseOutput
+	viewList tuiView = iota
+	viewSessions
+	viewInput
+	viewForm
 )
 
-type menuTag int
+type inputPurpose uint8
 
 const (
-	menuNew menuTag = iota
-	menuListRunning
-	menuListCompleted
-	menuStop
-	menuShow
-	menuTruncate
-	menuQuit
+	inputConfirmDelete inputPurpose = iota
 )
 
-type menuEntry struct {
-	title, desc string
-	tag         menuTag
+// resyncEvery bounds how stale the list can get when another barbtils process
+// changes something. Elapsed time itself needs no query — it is arithmetic.
+const resyncEvery = 10 * time.Second
+
+type tasksTuiModel struct {
+	ctx   context.Context
+	store *tasks.Store
+
+	view       tuiView
+	rows       []tasks.TaskRow
+	cursor     int
+	filter     tasks.Filter
+	filterName string
+
+	selTask  *tasks.TaskRow
+	sessions []tasks.SessionRow
+	// showArchived toggles banked sessions into the drill-down view.
+	showArchived bool
+
+	input    textinput.Model
+	inputFor inputPurpose
+
+	form *taskForm
+
+	// now is the only clock View reads, so every row on a frame agrees.
+	now         time.Time
+	lastRefresh time.Time
+
+	status string
+	err    error
+
+	width, height int
 }
 
-func (e menuEntry) Title() string       { return e.title }
-func (e menuEntry) Description() string { return e.desc }
-func (e menuEntry) FilterValue() string { return e.title }
+type tickMsg time.Time
+type tasksLoadedMsg struct{ rows []tasks.TaskRow }
+type sessionsLoadedMsg struct {
+	taskID uuid.UUID
+	rows   []tasks.SessionRow
+}
+type actionDoneMsg struct{ note string }
+type errMsg struct{ err error }
 
-type textInput = textinput.Model
-
-type tasksInteractiveModel struct {
-	db          *sql.DB
-	phase       tuiPhase
-	menuEntries []menuEntry
-	menuIndex   int
-	inputFor    menuTag
-	inputCtx    string
-	inputValue  textInput
-	cursor      tea.Cursor
-	output      string
-	errLine     string
-	width       int
-	height      int
-	ctx         context.Context
+func tickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
-func newTasksInteractiveModel(db *sql.DB) *tasksInteractiveModel {
-	ctx := context.Background()
-	menuDefs := []struct {
-		title, desc string
-		tag         menuTag
-	}{
-		{"Create new task", "Start a timer (name optional)", menuNew},
-		{"List running timers", "Tasks still open", menuListRunning},
-		{"List completed timers", "Tasks with an end time", menuListCompleted},
-		{"Stop a running timer", "Enter task ID", menuStop},
-		{"Show task details", "Enter task ID", menuShow},
-		{"Truncate all tasks", "Deletes every row — needs YES", menuTruncate},
-		{"Quit", "Leave interactive mode", menuQuit},
-	}
-	items := make([]menuEntry, len(menuDefs))
-	for i, d := range menuDefs {
-		items[i] = menuEntry{
-			title: fmt.Sprintf("%d. %s", i+1, d.title),
-			desc:  d.desc,
-			tag:   d.tag,
-		}
-	}
-
-	return &tasksInteractiveModel{
-		db:          db,
-		phase:       tuiPhaseMenu,
-		menuEntries: items,
-		ctx:         ctx,
-	}
-}
-
-func (m *tasksInteractiveModel) Init() tea.Cmd {
+func loadTasksCmd(ctx context.Context, s *tasks.Store, f tasks.Filter) tea.Cmd {
 	return func() tea.Msg {
-		return tea.RequestWindowSize()
+		rows, err := s.ListTasks(ctx, f)
+		if err != nil {
+			return errMsg{err}
+		}
+		return tasksLoadedMsg{rows}
 	}
 }
 
-func (m *tasksInteractiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func loadSessionsCmd(ctx context.Context, s *tasks.Store, id uuid.UUID, includeArchived bool) tea.Cmd {
+	return func() tea.Msg {
+		rows, err := s.Sessions(ctx, id, includeArchived)
+		if err != nil {
+			return errMsg{err}
+		}
+		return sessionsLoadedMsg{taskID: id, rows: rows}
+	}
+}
+
+// actionCmd runs a mutation off the Update goroutine.
+func actionCmd(fn func() (string, error)) tea.Cmd {
+	return func() tea.Msg {
+		note, err := fn()
+		if err != nil {
+			return errMsg{err}
+		}
+		return actionDoneMsg{note}
+	}
+}
+
+func newTasksTuiModel(ctx context.Context, s *tasks.Store) *tasksTuiModel {
+	ti := textinput.New()
+	ti.Prompt = "> "
+	ti.Placeholder = "task name"
+	ti.CharLimit = 512
+	ti.SetWidth(48)
+
+	return &tasksTuiModel{
+		ctx:        ctx,
+		store:      s,
+		view:       viewList,
+		input:      ti,
+		now:        time.Now(),
+		filterName: "all",
+	}
+}
+
+func (m *tasksTuiModel) Init() tea.Cmd {
+	return tea.Batch(
+		tea.RequestWindowSize,
+		loadTasksCmd(m.ctx, m.store, m.filter),
+		tickCmd(),
+	)
+}
+
+func (m *tasksTuiModel) selected() *tasks.TaskRow {
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return nil
+	}
+	return &m.rows[m.cursor]
+}
+
+func (m *tasksTuiModel) reload() tea.Cmd {
+	cmds := []tea.Cmd{loadTasksCmd(m.ctx, m.store, m.filter)}
+	if m.view == viewSessions && m.selTask != nil {
+		cmds = append(cmds, loadSessionsCmd(m.ctx, m.store, m.selTask.ID, m.showArchived))
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *tasksTuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
+		m.width, m.height = msg.Width, msg.Height
+		return m, nil
+
+	case tickMsg:
+		m.now = time.Time(msg)
+		// tea.Tick fires once; it must be re-armed or the clock stops.
+		cmds := []tea.Cmd{tickCmd()}
+		if m.now.Sub(m.lastRefresh) >= resyncEvery {
+			m.lastRefresh = m.now
+			cmds = append(cmds, loadTasksCmd(m.ctx, m.store, m.filter))
+		}
+		return m, tea.Batch(cmds...)
+
+	case tasksLoadedMsg:
+		m.rows = msg.rows
+		if m.cursor >= len(m.rows) {
+			m.cursor = max(0, len(m.rows)-1)
+		}
+		if m.selTask != nil {
+			for i := range m.rows {
+				if m.rows[i].ID == m.selTask.ID {
+					r := m.rows[i]
+					m.selTask = &r
+					break
+				}
+			}
+		}
+		return m, nil
+
+	case sessionsLoadedMsg:
+		m.sessions = msg.rows
+		return m, nil
+
+	case actionDoneMsg:
+		m.status, m.err = msg.note, nil
+		if m.view == viewForm {
+			m.form = nil
+			m.view = viewList
+		}
+		return m, m.reload()
+
+	case errMsg:
+		m.err, m.status = msg.err, ""
+		if m.view == viewForm && m.form != nil {
+			// Keep the form open so the value can be corrected, e.g. a name
+			// that is already taken.
+			m.form.err = msg.err.Error()
+			m.err = nil
+		}
 		return m, nil
 	}
 
-	switch m.phase {
-	case tuiPhaseOutput:
-		if km, ok := msg.(tea.KeyMsg); ok {
-			if m.errLine != "" {
-				switch km.String() {
-				case "ctrl+c":
-					return m, tea.Quit
-				case "enter":
-					m.returnFromError()
-				}
-				return m, nil
-			}
-			m.phase = tuiPhaseMenu
-			m.output = ""
-			m.errLine = ""
-		}
-		return m, nil
+	if m.view == viewForm {
+		return m.updateForm(msg)
+	}
+	if m.view == viewInput {
+		return m.updateInput(msg)
+	}
 
-	case tuiPhaseInput:
-		var cmd tea.Cmd
-		m.inputValue, cmd = m.inputValue.Update(msg)
-		kp, ok := msg.(tea.KeyPressMsg)
-		if !ok {
+	km, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		return m, nil
+	}
+	if m.view == viewSessions {
+		return m.updateSessions(km)
+	}
+	return m.updateList(km)
+}
+
+func (m *tasksTuiModel) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if kp, ok := msg.(tea.KeyPressMsg); ok {
+		switch kp.String() {
+		case "esc":
+			m.form = nil
+			m.view = viewList
+			m.err = nil
+			return m, nil
+		case "enter":
+			return m.submitForm()
+		}
+	}
+	cmd, _ := m.form.Update(msg)
+	return m, cmd
+}
+
+// submitForm creates or updates a task from the form. In edit mode a changed
+// name is applied too, so one screen configures everything about a task.
+func (m *tasksTuiModel) submitForm() (tea.Model, tea.Cmd) {
+	f := m.form
+
+	if !f.editing {
+		in, err := f.newTaskInput()
+		if err != nil {
+			f.err = err.Error()
 			return m, nil
 		}
+		return m, actionCmd(func() (string, error) {
+			t, err := m.store.CreateTask(m.ctx, in)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("created #%d %q", t.Seq, t.Name), nil
+		})
+	}
+
+	patch, err := f.metaPatch()
+	if err != nil {
+		f.err = err.Error()
+		return m, nil
+	}
+	newName := strings.TrimSpace(f.name.Value())
+	if newName == "" {
+		f.err = tasks.ErrNameEmpty.Error()
+		return m, nil
+	}
+	id, seq := f.taskID, f.taskSeq
+	return m, actionCmd(func() (string, error) {
+		if _, err := m.store.UpdateMeta(m.ctx, id, patch); err != nil {
+			return "", err
+		}
+		t, err := m.store.Queries().GetTaskByID(m.ctx, id)
+		if err != nil {
+			return "", err
+		}
+		if t.Name != newName {
+			if _, err := m.store.Rename(m.ctx, id, newName); err != nil {
+				return "", err
+			}
+		}
+		return fmt.Sprintf("updated #%d %q", seq, newName), nil
+	})
+}
+
+func (m *tasksTuiModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if kp, ok := msg.(tea.KeyPressMsg); ok {
 		switch kp.String() {
-		case "ctrl+c", "esc":
-			m.phase = tuiPhaseMenu
+		case "esc":
+			m.input.Reset()
+			m.view = viewList
+			m.err = nil
 			return m, nil
 		case "enter":
 			return m.submitInput()
-		case "ctrl+u":
-			m.inputValue.Prompt = ""
-			return m, nil
-		case "backspace", "ctrl+h":
-			m.inputValue.Prompt = trimLastRune(m.inputValue.Prompt)
-			return m, nil
 		}
-
-		// Use Key.Text so space and other printables work; String() reports "space", not " ".
-		k := kp.Key()
-		if k.Text != "" {
-			if len(m.inputValue.Prompt)+len(k.Text) <= 512 {
-				m.inputValue.Prompt += k.Text
-			}
-			return m, nil
-		}
-		return m, cmd
-
-	case tuiPhaseMenu:
-		if km, ok := msg.(tea.KeyMsg); ok {
-			switch km.String() {
-			case "ctrl+c", "q", "esc":
-				return m, tea.Quit
-			case "enter":
-				return m.menuEnter()
-			case "up", "k":
-				if len(m.menuEntries) > 0 {
-					m.menuIndex = (m.menuIndex - 1 + len(m.menuEntries)) % len(m.menuEntries)
-				}
-				return m, nil
-			case "down", "j":
-				if len(m.menuEntries) > 0 {
-					m.menuIndex = (m.menuIndex + 1) % len(m.menuEntries)
-				}
-				return m, nil
-			}
-			if key := km.String(); len(key) == 1 {
-				c := key[0]
-				n := len(m.menuEntries)
-				if n > 0 && n <= 9 && c >= '1' && c <= byte('0'+n) {
-					idx := int(c - '1')
-					if m.menuIndex == idx {
-						return m.menuEnter()
-					}
-					m.menuIndex = idx
-					return m, nil
-				}
-			}
-		}
-		return m, nil
 	}
+	// Everything else belongs to the component: word delete, home/end, paste.
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, cmd
+}
 
+func (m *tasksTuiModel) submitInput() (tea.Model, tea.Cmd) {
+	value := strings.TrimSpace(m.input.Value())
+
+	switch m.inputFor {
+	case inputConfirmDelete:
+		row := m.selTask
+		if row == nil || !strings.EqualFold(value, "yes") {
+			m.input.Reset()
+			m.view = viewList
+			m.status = "cancelled"
+			return m, nil
+		}
+		id, seq, name := row.ID, row.Seq, row.Name
+		m.input.Reset()
+		m.view = viewList
+		m.selTask = nil
+		return m, actionCmd(func() (string, error) {
+			if err := m.store.DeleteTask(m.ctx, id); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("deleted #%d %q", seq, name), nil
+		})
+	}
 	return m, nil
 }
 
-func (m *tasksInteractiveModel) viewHeader() string {
-	return tasksBorder.Render(lipgloss.JoinVertical(lipgloss.Left,
-		tasksAccent.Render("Tasks"),
-		tasksMuted.Render("Now: "+time.Now().Format("Mon 02 Jan 2006, 03:04:05 PM")),
-	))
-}
-
-func (m *tasksInteractiveModel) menuHelpLine() string {
-	return tasksMuted.Render("↑/↓ move • 1–7 highlight • same key again or enter to open • q quit")
-}
-
-// layoutMenuListHeight is the max number of menu entries visible at once (each entry is two rows).
-func (m *tasksInteractiveModel) layoutMenuListHeight(termH int) int {
-	headerH := lipgloss.Height(m.viewHeader())
-	helpH := lipgloss.Height(m.menuHelpLine())
-	gap := 2 // JoinVertical "" between header, list, and help
-	avail := termH - headerH - helpH - gap
-	// Each menu entry is two lipgloss rows (title + description).
-	maxEntries := avail / 2
-	if maxEntries < 1 {
-		return 1
+func (m *tasksTuiModel) updateSessions(km tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch km.String() {
+	case "esc", "backspace", "q":
+		m.view = viewList
+		m.selTask = nil
+		m.sessions = nil
+		return m, nil
+	case "ctrl+c":
+		return m, tea.Quit
+	case "R":
+		return m, m.reload()
+	case "A":
+		m.showArchived = !m.showArchived
+		if m.selTask != nil {
+			m.sessions = nil
+			return m, loadSessionsCmd(m.ctx, m.store, m.selTask.ID, m.showArchived)
+		}
+		return m, nil
 	}
-	return maxEntries
+	return m, nil
 }
 
-func (m *tasksInteractiveModel) placeInTerminal(content string, vPos lipgloss.Position) string {
+func (m *tasksTuiModel) updateList(km tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch km.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+
+	case "up", "k":
+		if len(m.rows) > 0 {
+			m.cursor = (m.cursor - 1 + len(m.rows)) % len(m.rows)
+		}
+		return m, nil
+	case "down", "j":
+		if len(m.rows) > 0 {
+			m.cursor = (m.cursor + 1) % len(m.rows)
+		}
+		return m, nil
+	case "g":
+		m.cursor = 0
+		return m, nil
+	case "G":
+		m.cursor = max(0, len(m.rows)-1)
+		return m, nil
+
+	case "enter":
+		row := m.selected()
+		if row == nil {
+			return m, nil
+		}
+		r := *row
+		m.selTask = &r
+		m.view = viewSessions
+		m.sessions = nil
+		return m, loadSessionsCmd(m.ctx, m.store, r.ID, m.showArchived)
+
+	case "n":
+		m.form = createForm()
+		m.view = viewForm
+		m.err = nil
+		return m, m.form.focusCurrent()
+
+	case "e":
+		row := m.selected()
+		if row == nil {
+			return m, nil
+		}
+		m.form = editForm(*row)
+		m.view = viewForm
+		m.err = nil
+		return m, m.form.focusCurrent()
+
+	case "s":
+		row := m.selected()
+		if row == nil {
+			return m, nil
+		}
+		if row.IsRunning() {
+			m.status = fmt.Sprintf("#%d is already running", row.Seq)
+			return m, nil
+		}
+		id, seq, name := row.ID, row.Seq, row.Name
+		return m, actionCmd(func() (string, error) {
+			res, err := m.store.Start(m.ctx, id)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("started s%d on #%d %q", res.Session.Seq, seq, name), nil
+		})
+
+	case "p":
+		row := m.selected()
+		if row == nil {
+			return m, nil
+		}
+		if !row.IsRunning() {
+			m.status = fmt.Sprintf("#%d is not running", row.Seq)
+			return m, nil
+		}
+		id, seq := row.ID, row.Seq
+		return m, actionCmd(func() (string, error) {
+			res, err := m.store.Pause(m.ctx, id)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("paused #%d, total %s", seq, fmtShort(res.Total)), nil
+		})
+
+	case "x":
+		row := m.selected()
+		if row == nil {
+			return m, nil
+		}
+		if row.IsRecurring() {
+			m.status = fmt.Sprintf("#%d is recurring — press a to archive instead", row.Seq)
+			return m, nil
+		}
+		task := database.Task{ID: row.ID, Seq: row.Seq, Name: row.Name, Type: row.Type}
+		return m, actionCmd(func() (string, error) {
+			res, err := m.store.Complete(m.ctx, task)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("completed #%d, total %s", task.Seq, fmtShort(res.Total)), nil
+		})
+
+	case "a":
+		row := m.selected()
+		if row == nil {
+			return m, nil
+		}
+		id, seq := row.ID, row.Seq
+		return m, actionCmd(func() (string, error) {
+			res, err := m.store.Archive(m.ctx, id)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("archived #%d, total %s", seq, fmtShort(res.Total)), nil
+		})
+
+	case "A":
+		row := m.selected()
+		if row == nil {
+			return m, nil
+		}
+		if row.SessionCount == 0 {
+			m.status = fmt.Sprintf("#%d has no finished sessions to archive", row.Seq)
+			return m, nil
+		}
+		id, seq := row.ID, row.Seq
+		return m, actionCmd(func() (string, error) {
+			banked, err := m.store.ArchiveSessions(m.ctx, id)
+			if err != nil {
+				return "", err
+			}
+			if len(banked) == 0 {
+				return "", fmt.Errorf("#%d has no finished sessions to archive", seq)
+			}
+			var d time.Duration
+			for _, b := range banked {
+				d += b.Duration
+			}
+			return fmt.Sprintf("archived %d session(s) on #%d, banking %s", len(banked), seq, fmtShort(d)), nil
+		})
+
+	case "d":
+		row := m.selected()
+		if row == nil {
+			return m, nil
+		}
+		r := *row
+		m.selTask = &r
+		m.inputFor = inputConfirmDelete
+		m.input.Reset()
+		m.view = viewInput
+		return m, m.input.Focus()
+
+	case "f":
+		m.cycleFilter()
+		return m, loadTasksCmd(m.ctx, m.store, m.filter)
+
+	case "R":
+		return m, m.reload()
+	}
+	return m, nil
+}
+
+func (m *tasksTuiModel) cycleFilter() {
+	inProgress := database.TasksStatusesInProgress
+	paused := database.TasksStatusesPaused
+	completed := database.TasksStatusesCompleted
+
+	switch m.filterName {
+	case "all":
+		m.filter, m.filterName = tasks.Filter{OnlyOpen: true}, "running"
+	case "running":
+		m.filter, m.filterName = tasks.Filter{Status: &paused}, "paused"
+	case "paused":
+		m.filter, m.filterName = tasks.Filter{Status: &completed}, "completed"
+	case "completed":
+		m.filter, m.filterName = tasks.Filter{Status: &inProgress}, "in progress"
+	default:
+		m.filter, m.filterName = tasks.Filter{}, "all"
+	}
+	m.cursor = 0
+}
+
+// ---- view ----
+
+func (m *tasksTuiModel) View() tea.View {
+	var body string
+	switch m.view {
+	case viewSessions:
+		body = m.renderSessionsView()
+	case viewForm:
+		body = m.form.View()
+	case viewInput:
+		body = m.renderInputView()
+	default:
+		body = m.renderListView()
+	}
+
+	stack := lipgloss.JoinVertical(lipgloss.Left,
+		m.renderHeader(), "", body, "", m.renderFooter())
+
 	w, h := m.width, m.height
 	if w <= 0 {
 		w = 80
@@ -227,350 +560,102 @@ func (m *tasksInteractiveModel) placeInTerminal(content string, vPos lipgloss.Po
 	if h <= 0 {
 		h = 24
 	}
-	return lipgloss.Place(w, h, lipgloss.Left, vPos, content)
+	v := tea.NewView(lipgloss.Place(w, h, lipgloss.Left, lipgloss.Top, stack))
+	v.AltScreen = true
+	v.WindowTitle = "barbtils · tasks"
+	return v
 }
 
-func (m *tasksInteractiveModel) menuEnter() (tea.Model, tea.Cmd) {
-	if len(m.menuEntries) == 0 || m.menuIndex < 0 || m.menuIndex >= len(m.menuEntries) {
-		return m, nil
-	}
-	e := m.menuEntries[m.menuIndex]
-
-	switch e.tag {
-	case menuQuit:
-		return m, tea.Quit
-
-	case menuNew:
-		m.phase = tuiPhaseInput
-		m.inputFor = menuNew
-		m.inputCtx = ""
-		m.inputValue.Prompt = ""
-		return m, nil
-
-	case menuListRunning:
-		m.inputFor = menuListRunning
-		return m.runAndShow(func(w *bytes.Buffer) error {
-			return getAllRunningTimers(m.db, false, w)
-		})
-
-	case menuListCompleted:
-		m.inputFor = menuListCompleted
-		return m.runAndShow(func(w *bytes.Buffer) error {
-			return getAllRunningTimers(m.db, true, w)
-		})
-
-	case menuStop:
-		m.phase = tuiPhaseInput
-		m.inputFor = menuStop
-		m.inputCtx = m.taskSelectionPrompt(false)
-		m.inputValue.Prompt = ""
-		return m, nil
-
-	case menuShow:
-		m.phase = tuiPhaseInput
-		m.inputFor = menuShow
-		m.inputCtx = m.taskSelectionPrompt(true)
-		m.inputValue.Prompt = ""
-		return m, nil
-
-	case menuTruncate:
-		m.phase = tuiPhaseInput
-		m.inputFor = menuTruncate
-		m.inputCtx = ""
-		m.inputValue.Prompt = ""
-		return m, nil
-	}
-
-	return m, nil
-}
-
-func (m *tasksInteractiveModel) runAndShow(fn func(*bytes.Buffer) error) (tea.Model, tea.Cmd) {
-	var buf bytes.Buffer
-	err := fn(&buf)
-	m.phase = tuiPhaseOutput
-	m.output = buf.String()
-	if err != nil {
-		m.errLine = err.Error()
-	} else {
-		m.errLine = ""
-	}
-	return m, nil
-}
-
-func (m *tasksInteractiveModel) submitInput() (tea.Model, tea.Cmd) {
-	var buf bytes.Buffer
-	var err error
-
-	switch m.inputFor {
-	case menuNew:
-		err = saveNewTask(m.db, strings.TrimSpace(m.inputValue.Prompt), &buf)
-
-	case menuStop:
-		id, convErr := strconv.Atoi(strings.TrimSpace(m.inputValue.Prompt))
-		if convErr != nil {
-			m.finishInputWithError("invalid task ID")
-			return m, nil
+func (m *tasksTuiModel) renderHeader() string {
+	running := 0
+	for _, r := range m.rows {
+		if r.IsRunning() {
+			running++
 		}
-		err = stopTimer(m.db, id, &buf)
+	}
+	return tasksBorder.Render(lipgloss.JoinVertical(lipgloss.Left,
+		tasksAccent.Render("Tasks")+tasksMuted.Render(fmt.Sprintf("   filter: %s   running: %d", m.filterName, running)),
+		tasksMuted.Render(m.now.Format("Mon 02 Jan 2006, "+clockFmt)),
+	))
+}
 
-	case menuShow:
-		id, convErr := strconv.Atoi(strings.TrimSpace(m.inputValue.Prompt))
-		if convErr != nil {
-			m.finishInputWithError("invalid task ID")
-			return m, nil
-		}
-		err = showSpecificTimer(m.db, id, &buf)
-
-	case menuTruncate:
-		// var answer any = strings.ToLower(strings.TrimSpace(m.input.Value()))
-		// if answer == "yes" {
-		allowedString := []string{"yes", "y", "1"}
-		var answer string = m.inputValue.Prompt
-		if slices.Contains(allowedString, strings.ToLower(answer)) {
-			err = truncateAllTasks(m.db, &buf)
+func (m *tasksTuiModel) renderListView() string {
+	if len(m.rows) == 0 {
+		return tasksMuted.Render("  no tasks — press n to create one")
+	}
+	lines := strings.Split(renderTaskTable(m.rows, m.now), "\n")
+	out := make([]string, 0, len(lines))
+	out = append(out, "  "+lines[0]) // header row
+	for i, ln := range lines[1:] {
+		if i == m.cursor {
+			out = append(out, tasksAccent.Render("> ")+ln)
 		} else {
-			fmt.Fprintln(&buf, tasksMuted.Render("Cancelled."))
+			out = append(out, "  "+ln)
 		}
-
-	default:
-		m.phase = tuiPhaseMenu
-		return m, nil
 	}
-
-	m.phase = tuiPhaseOutput
-	m.output = buf.String()
-	if err != nil {
-		m.errLine = err.Error()
-	} else {
-		m.errLine = ""
-	}
-	return m, nil
+	return strings.Join(out, "\n")
 }
 
-func (m *tasksInteractiveModel) finishInputWithError(msg string) {
-	m.phase = tuiPhaseOutput
-	m.output = ""
-	m.errLine = msg
-}
-
-func (m *tasksInteractiveModel) returnFromError() {
-	m.output = ""
-	m.errLine = ""
-
-	switch m.inputFor {
-	case menuNew:
-		m.phase = tuiPhaseInput
-		m.inputCtx = ""
-		m.inputValue.Prompt = ""
-	case menuStop:
-		m.phase = tuiPhaseInput
-		m.inputCtx = m.taskSelectionPrompt(false)
-		m.inputValue.Prompt = ""
-	case menuShow:
-		m.phase = tuiPhaseInput
-		m.inputCtx = m.taskSelectionPrompt(true)
-		m.inputValue.Prompt = ""
-	case menuTruncate:
-		m.phase = tuiPhaseInput
-		m.inputCtx = ""
-		m.inputValue.Prompt = ""
-	default:
-		m.phase = tuiPhaseMenu
-	}
-}
-
-func (m *tasksInteractiveModel) taskSelectionPrompt(includeCompleted bool) string {
-	var (
-		query string
-		title string
-	)
-	if includeCompleted {
-		query = `SELECT id, task_name, end_time FROM tasks ORDER BY end_time IS NOT NULL, id`
-		title = "Available tasks (running + completed)"
-	} else {
-		query = `SELECT id, task_name, end_time FROM tasks WHERE end_time IS NULL ORDER BY id`
-		title = "Running tasks you can stop"
-	}
-
-	rows, err := m.db.Query(query)
-	if err != nil {
-		return tasksErr.Render("Failed loading tasks: " + err.Error())
-	}
-	defer rows.Close()
-
-	var lines []string
-	for rows.Next() {
-		var (
-			id      int
-			name    sql.NullString
-			endTime sql.NullTime
-		)
-		if err := rows.Scan(&id, &name, &endTime); err != nil {
-			return tasksErr.Render("Failed reading tasks: " + err.Error())
-		}
-
-		label := strings.TrimSpace(name.String)
-		if label == "" {
-			label = "(unnamed)"
-		}
-
-		status := tasksMuted.Render("running")
-		if endTime.Valid {
-			status = tasksMuted.Render("completed")
-		}
-		lines = append(lines, fmt.Sprintf("  #%d  %s  [%s]", id, label, status))
-	}
-	if err := rows.Err(); err != nil {
-		return tasksErr.Render("Failed iterating tasks: " + err.Error())
-	}
-
-	var b strings.Builder
-	b.WriteString(tasksAccent.Render(title))
-	b.WriteByte('\n')
-	if len(lines) == 0 {
-		b.WriteString(tasksMuted.Render("  (none)"))
-		return b.String()
-	}
-	b.WriteString(strings.Join(lines, "\n"))
-	return b.String()
-}
-
-func (m *tasksInteractiveModel) View() tea.View {
-	header := m.viewHeader()
-	wrap := func(content string) tea.View {
-		v := tea.NewView(content)
-		v.AltScreen = true
-		return v
-	}
-
-	switch m.phase {
-	case tuiPhaseMenu:
-		stack := lipgloss.JoinVertical(lipgloss.Left, header, "", m.renderMenu(), "", m.menuHelpLine())
-		return wrap(m.placeInTerminal(stack, lipgloss.Top))
-
-	case tuiPhaseInput:
-		var prompt string
-		switch m.inputFor {
-		case menuNew:
-			prompt = tasksMuted.Render("Task name")
-		case menuStop:
-			prompt = tasksMuted.Render("Task ID to stop")
-		case menuShow:
-			prompt = tasksMuted.Render("Task ID")
-		case menuTruncate:
-			prompt = tasksWarn.Render("Truncate all rows — type YES to confirm")
-		default:
-			prompt = ""
-		}
-		body := lipgloss.JoinVertical(lipgloss.Left,
-			prompt,
-			m.inputCtx,
-			"",
-			m.renderInput(),
-			"",
-			tasksMuted.Render("<esc> cancel • <enter> submit"),
-		)
-		stack := lipgloss.JoinVertical(lipgloss.Left, header, "", body)
-		return wrap(m.placeInTerminal(stack, lipgloss.Top))
-
-	case tuiPhaseOutput:
-		var b strings.Builder
-		if strings.TrimSpace(m.output) != "" {
-			b.WriteString(m.output)
-		}
-		if m.errLine != "" {
-			if b.Len() > 0 {
-				b.WriteString("\n")
-			}
-			b.WriteString(tasksErr.Render(m.errLine))
-		}
-		if b.Len() == 0 {
-			b.WriteString(tasksMuted.Render("(no output)"))
-		}
-		b.WriteString("\n\n")
-		if m.errLine != "" {
-			b.WriteString(tasksMuted.Render("error shown • <enter> return to action • <ctrl+c> quit"))
-		} else {
-			b.WriteString(tasksMuted.Render("any key to continue"))
-		}
-		stack := lipgloss.JoinVertical(lipgloss.Left, header, "", b.String())
-		return wrap(m.placeInTerminal(stack, lipgloss.Top))
-	}
-
-	return wrap("")
-}
-
-func (m *tasksInteractiveModel) renderMenu() string {
-	if len(m.menuEntries) == 0 {
-		return tasksMuted.Render("(no actions)")
-	}
-
-	selectedTitle := lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(lipgloss.Color("62")).Foreground(lipgloss.Color("86")).Bold(true).Padding(0, 0, 0, 1)
-	selectedDesc := selectedTitle.Copy().Foreground(lipgloss.Color("245")).Bold(false)
-	normalTitle := lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Padding(0, 0, 0, 2)
-	normalDesc := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Padding(0, 0, 0, 2)
-
-	maxRows := m.layoutMenuListHeight(m.height)
-	if maxRows > len(m.menuEntries) {
-		maxRows = len(m.menuEntries)
-	}
-	if maxRows < 1 {
-		maxRows = 1
-	}
-
-	start := 0
-	if m.menuIndex >= maxRows {
-		start = m.menuIndex - maxRows + 1
-	}
-	end := min(start+maxRows, len(m.menuEntries))
-
-	var rows []string
-	for i := start; i < end; i++ {
-		e := m.menuEntries[i]
-		if i == m.menuIndex {
-			rows = append(rows, selectedTitle.Render(e.title))
-			rows = append(rows, selectedDesc.Render(e.desc))
-		} else {
-			rows = append(rows, normalTitle.Render(e.title))
-			rows = append(rows, normalDesc.Render(e.desc))
-		}
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, rows...)
-}
-
-func (m *tasksInteractiveModel) inputPlaceholder() string {
-	switch m.inputFor {
-	case menuNew:
-		return "optional name"
-	case menuStop, menuShow:
-		return "task ID"
-	case menuTruncate:
-		return "type YES/Y/1 to confirm"
-	default:
+func (m *tasksTuiModel) renderSessionsView() string {
+	if m.selTask == nil {
 		return ""
 	}
-}
-
-func (m *tasksInteractiveModel) renderInput() string {
-	value := m.inputValue.Prompt
-	if value == "" {
-		value = tasksMuted.Render(m.inputPlaceholder())
+	head := tasksAccent.Render(fmt.Sprintf("#%d %s", m.selTask.Seq, m.selTask.Name)) + "  " +
+		statusStyled(m.selTask.Status) + "  " +
+		tasksMuted.Render("total ") + tasksAccent.Render(fmtShort(m.selTask.Elapsed(m.now)))
+	if m.selTask.HasArchive() {
+		head += tasksMuted.Render("  ·  lifetime ") + tasksAccent.Render(fmtShort(m.selTask.Lifetime(m.now))) +
+			tasksMuted.Render(fmt.Sprintf(" (%d archived)", m.selTask.ArchivedSessionCount))
 	}
-	cursor := tasksAccent.Render("█")
-	return tasksBorder.Render(value + cursor)
-}
-
-func trimLastRune(s string) string {
-	if s == "" {
-		return ""
+	if m.showArchived {
+		head += tasksMuted.Render("  ·  showing archived")
 	}
-	_, size := utf8.DecodeLastRuneInString(s)
-	return s[:len(s)-size]
+	if m.sessions == nil {
+		return head + "\n\n" + tasksMuted.Render("  loading…")
+	}
+	if len(m.sessions) == 0 {
+		return head + "\n\n" + sessionsEmptyNote(*m.selTask, m.showArchived)
+	}
+	return head + "\n\n" + renderSessionTable(m.sessions)
 }
 
-func taskInteractiveLoop(db *sql.DB) error {
-	p := tea.NewProgram(newTasksInteractiveModel(db))
+func (m *tasksTuiModel) renderInputView() string {
+	name := ""
+	if m.selTask != nil {
+		name = fmt.Sprintf(" #%d %q and its %d session(s)", m.selTask.Seq, m.selTask.Name, m.selTask.SessionCount)
+	}
+	prompt := tasksErr.Render("Delete"+name) + "\n" + tasksWarn.Render("type yes to confirm")
+	return prompt + "\n\n" + tasksBorder.Render(m.input.View())
+}
+
+func (m *tasksTuiModel) renderFooter() string {
+	var line string
+	switch {
+	case m.err != nil:
+		line = tasksErr.Render(m.err.Error())
+	case m.status != "":
+		line = tasksOK.Render(m.status)
+	}
+
+	var help string
+	switch m.view {
+	case viewSessions:
+		help = "esc back • A show/hide archived • R refresh • q quit"
+	case viewForm:
+		help = ""
+	case viewInput:
+		help = "enter submit • esc cancel"
+	default:
+		help = "↑/↓ move • s start • p pause • x complete • a archive • enter sessions • n new • e edit • A archive sessions • d delete • f filter • R refresh • q quit"
+	}
+	if line == "" {
+		return tasksMuted.Render(help)
+	}
+	return line + "\n" + tasksMuted.Render(help)
+}
+
+func taskInteractiveLoop(ctx context.Context, s *tasks.Store) error {
+	p := tea.NewProgram(newTasksTuiModel(ctx, s), tea.WithContext(ctx))
 	_, err := p.Run()
 	return err
 }

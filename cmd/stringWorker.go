@@ -55,22 +55,21 @@ func init() {
 	stringWorker.Flags().BoolVarP(&pretty, "pretty", "p", false, "Use this to get a main pretty output")
 }
 
-func processText(message string) (string) {
+func processText(message string) string {
 	hoursAndMinsReGex, err := regexp.Compile(`(\d\d:\d\d)`)
 	if err != nil {
 		l.Logger.Fatal(err)
 	}
-	
-	matches := hoursAndMinsReGex.FindAllString(message,-1)
+
+	matches := hoursAndMinsReGex.FindAllString(message, -1)
 	l.Logger.Debug("[MATCHES LENGTH]", "Matches Arr", len(matches))
 	l.Logger.Debug("[PROCESSED TEXT]", "Matches Arr", matches)
 
 	str := strings.Join(matches, "m + ")
 	str = fmt.Sprint(str + "m")
 	str = strings.ReplaceAll(str, ":", "h ")
-	
+
 	l.Logger.Debug("New String", "str", str)
-	
 
 	return str
 }
@@ -100,15 +99,39 @@ func calculateTotalSeconds(input string) int64 {
 
 		var seconds int64
 		switch unit {
-		case "d": seconds = val * 86400
-		case "h": seconds = val * 3600
-		case "m": seconds = val * 60
-		case "s": seconds = val
+		case "d":
+			seconds = val * 86400
+		case "h":
+			seconds = val * 3600
+		case "m":
+			seconds = val * 60
+		case "s":
+			seconds = val
 		}
 
 		totalSeconds += (seconds * currentOp)
 	}
 	return totalSeconds
+}
+
+// bstResult is the --json shape of a bst calculation. The float fields keep
+// full precision rather than the 3-6 decimals the table prints, so a consumer
+// can round to whatever it needs.
+type bstResult struct {
+	TotalSeconds int64        `json:"total_seconds"`
+	Formatted    string       `json:"formatted"`
+	Breakdown    bstBreakdown `json:"breakdown"`
+
+	AsDays    float64 `json:"as_days"`
+	AsHours   float64 `json:"as_hours"`
+	AsMinutes float64 `json:"as_minutes"`
+}
+
+type bstBreakdown struct {
+	Days    int64 `json:"days"`
+	Hours   int64 `json:"hours"`
+	Minutes int64 `json:"minutes"`
+	Seconds int64 `json:"seconds"`
 }
 
 func formatResult(totalSec int64, pretty bool) {
@@ -119,15 +142,32 @@ func formatResult(totalSec int64, pretty bool) {
 	m := remainder / 60
 	s := remainder % 60
 
+	// --json wins over --pretty: both ask for one machine-readable line, and the
+	// JSON document is the more useful of the two.
+	if jsonEnabled {
+		if err := emitJSON(bstResult{
+			TotalSeconds: totalSec,
+			Formatted:    fmt.Sprintf("%dd %dh %dm %ds", d, h, m, s),
+			Breakdown:    bstBreakdown{Days: d, Hours: h, Minutes: m, Seconds: s},
+			AsDays:       float64(totalSec) / 86400.0,
+			AsHours:      float64(totalSec) / 3600.0,
+			AsMinutes:    float64(totalSec) / 60.0,
+		}); err != nil {
+			l.Logger.Fatal("Error while writing JSON output", "Error", err)
+		}
+		return
+	}
+
 	if !pretty {
-		// Output exactly like your screenshot
+		// The %10 widths align the unit column; they are presentation only, which
+		// is why the JSON branch above carries numbers instead of these strings.
 		l.Logger.Printf("= %dd %dh %dm %ds", d, h, m, s)
 		l.Logger.Printf("= %10.6f d", float64(totalSec)/86400.0)
 		l.Logger.Printf("= %10.5f h", float64(totalSec)/3600.0)
 		l.Logger.Printf("= %10.3f m", float64(totalSec)/60.0)
 		l.Logger.Printf("= %10d s", totalSec)
 	} else {
-		pewp := fmt.Sprintf("%dd %dh %dm %ds", d, h, m, s)
+		pewp := fmt.Sprintf("%dd %dh %dm %ds\n", d, h, m, s)
 		// fmt.Printf("%dd %dh %dm %ds", d, h, m, s)
 		fmt.Fprint(os.Stdout, pewp)
 	}
