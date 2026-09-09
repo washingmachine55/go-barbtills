@@ -80,6 +80,9 @@ Examples:
   barbtils tasks -i                        # full-screen TUI`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if flagInteractive {
+			if jsonEnabled {
+				return errJSONUnsupported("the interactive TUI")
+			}
 			return runWithStore(func(ctx context.Context, s *tasks.Store, _ []string) error {
 				return taskInteractiveLoop(ctx, s)
 			})(cmd, args)
@@ -155,7 +158,14 @@ var tasksListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Println(renderTaskTable(rows, time.Now()))
+		now := time.Now()
+		if jsonEnabled {
+			return emitJSON(map[string]any{
+				"tasks": taskJSONList(rows, now),
+				"count": len(rows),
+			})
+		}
+		fmt.Println(renderTaskTable(rows, now))
 		return nil
 	}),
 }
@@ -193,6 +203,9 @@ var tasksNewCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
+			if jsonEnabled {
+				return emitJSON(actionResultJSON("created_and_started", res))
+			}
 			fmt.Println(tasksOK.Render(fmt.Sprintf("Created #%d %q and started session s%d",
 				res.Task.Seq, res.Task.Name, res.Session.Seq)))
 			return nil
@@ -200,6 +213,10 @@ var tasksNewCmd = &cobra.Command{
 		t, err := s.CreateTask(ctx, in)
 		if err != nil {
 			return err
+		}
+		if jsonEnabled {
+			ref := taskRefJSONOf(t)
+			return emitJSON(actionJSON{Action: "created", Task: &ref})
 		}
 		fmt.Println(tasksOK.Render(fmt.Sprintf("Created #%d %q", t.Seq, t.Name)) + " " +
 			tasksMuted.Render("start it with: barbtils tasks start "+quote(t.Name)))
@@ -223,6 +240,9 @@ var tasksStartCmd = &cobra.Command{
 			}
 			return err
 		}
+		if jsonEnabled {
+			return emitJSON(actionResultJSON("started", res))
+		}
 		fmt.Println(tasksOK.Render(fmt.Sprintf("Started session s%d on #%d %q",
 			res.Session.Seq, res.Task.Seq, res.Task.Name)) + " " +
 			tasksMuted.Render("total so far "+fmtShort(res.Total)))
@@ -245,6 +265,9 @@ var tasksPauseCmd = &cobra.Command{
 				return fmt.Errorf("#%d %q is not running", t.Seq, t.Name)
 			}
 			return err
+		}
+		if jsonEnabled {
+			return emitJSON(actionResultJSON("paused", res))
 		}
 		sess := tasks.SessionOf(*res.Session)
 		fmt.Println(tasksWarn.Render(fmt.Sprintf("Paused #%d %q", res.Task.Seq, res.Task.Name)) +
@@ -272,6 +295,9 @@ var tasksStopCmd = &cobra.Command{
 			}
 			return err
 		}
+		if jsonEnabled {
+			return emitJSON(actionResultJSON("completed", res))
+		}
 		fmt.Println(tasksOK.Render(fmt.Sprintf("Completed #%d %q", res.Task.Seq, res.Task.Name)) + " " +
 			tasksMuted.Render("total ") + tasksAccent.Render(fmtDuration(res.Total)))
 		return nil
@@ -290,6 +316,9 @@ var tasksArchiveCmd = &cobra.Command{
 		res, err := s.Archive(ctx, t.ID)
 		if err != nil {
 			return err
+		}
+		if jsonEnabled {
+			return emitJSON(actionResultJSON("archived", res))
 		}
 		fmt.Println(tasksOK.Render(fmt.Sprintf("Archived #%d %q", res.Task.Seq, res.Task.Name)) + " " +
 			tasksMuted.Render("total ") + tasksAccent.Render(fmtDuration(res.Total)))
@@ -314,6 +343,14 @@ var tasksShowCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		now := time.Now()
+		if jsonEnabled {
+			return emitJSON(map[string]any{
+				"task":     taskJSONOf(row, now),
+				"sessions": sessionJSONList(sessions),
+				"totals":   sessionTotalsOf(sessions),
+			})
+		}
 		fmt.Println(renderTaskDetail(row, sessions, time.Now()))
 		return nil
 	}),
@@ -335,6 +372,13 @@ var tasksSessionsCmd = &cobra.Command{
 		row, err := s.GetTaskRow(ctx, t.Seq)
 		if err != nil {
 			return err
+		}
+		if jsonEnabled {
+			return emitJSON(map[string]any{
+				"task":     taskJSONOf(row, time.Now()),
+				"sessions": sessionJSONList(sessions),
+				"totals":   sessionTotalsOf(sessions),
+			})
 		}
 		fmt.Println(tasksAccent.Render(fmt.Sprintf("#%d %s", t.Seq, t.Name)))
 		if len(sessions) == 0 {
@@ -358,6 +402,10 @@ var tasksRenameCmd = &cobra.Command{
 		renamed, err := s.Rename(ctx, t.ID, args[1])
 		if err != nil {
 			return err
+		}
+		if jsonEnabled {
+			ref := taskRefJSONOf(renamed)
+			return emitJSON(actionJSON{Action: "renamed", Task: &ref, PreviousName: t.Name})
 		}
 		fmt.Println(tasksOK.Render(fmt.Sprintf("Renamed #%d %q -> %q", renamed.Seq, t.Name, renamed.Name)))
 		return nil
@@ -429,7 +477,6 @@ Examples:
 		if err != nil {
 			return err
 		}
-		fmt.Println(tasksOK.Render(fmt.Sprintf("Updated #%d %q", updated.Seq, updated.Name)))
 		row, err := s.GetTaskRow(ctx, updated.Seq)
 		if err != nil {
 			return err
@@ -438,6 +485,15 @@ Examples:
 		if err != nil {
 			return err
 		}
+		if jsonEnabled {
+			return emitJSON(map[string]any{
+				"action":   "updated",
+				"task":     taskJSONOf(row, time.Now()),
+				"sessions": sessionJSONList(sessions),
+				"totals":   sessionTotalsOf(sessions),
+			})
+		}
+		fmt.Println(tasksOK.Render(fmt.Sprintf("Updated #%d %q", updated.Seq, updated.Name)))
 		fmt.Println(renderTaskDetail(row, sessions, time.Now()))
 		return nil
 	}),
@@ -462,6 +518,13 @@ var tasksRmCmd = &cobra.Command{
 		}
 		if err := s.DeleteTask(ctx, t.ID); err != nil {
 			return err
+		}
+		if jsonEnabled {
+			ref := taskRefJSONOf(t)
+			// Archived sessions are deleted along with the live ones, so the
+			// count reports both rather than only the current period.
+			deleted := int(row.SessionCount + row.ArchivedSessionCount)
+			return emitJSON(actionJSON{Action: "deleted", Task: &ref, SessionCount: &deleted})
 		}
 		fmt.Println(tasksWarn.Render(fmt.Sprintf("Deleted #%d %q and %d session(s)", row.Seq, row.Name, row.SessionCount)))
 		return nil
@@ -499,6 +562,9 @@ rollover keeps counting into the new period.
 			if len(restored) == 0 {
 				return fmt.Errorf("#%d %q has no archived sessions", t.Seq, t.Name)
 			}
+			if jsonEnabled {
+				return emitJSON(sessionsDurationJSON("sessions_restored", t, restored))
+			}
 			var d time.Duration
 			for _, r := range restored {
 				d += r.Duration
@@ -515,13 +581,22 @@ rollover keeps counting into the new period.
 		if len(banked) == 0 {
 			return fmt.Errorf("#%d %q has no finished sessions to archive", t.Seq, t.Name)
 		}
-		var d time.Duration
-		for _, r := range banked {
-			d += r.Duration
-		}
 		row, err := s.GetTaskRow(ctx, t.Seq)
 		if err != nil {
 			return err
+		}
+		if jsonEnabled {
+			now := time.Now()
+			out := sessionsDurationJSON("sessions_archived", t, banked)
+			out.TotalSeconds = int64Val(int64(row.Elapsed(now).Seconds()))
+			out.Total = fmtShort(row.Elapsed(now))
+			out.LifetimeSeconds = int64Val(int64(row.Lifetime(now).Seconds()))
+			out.Running = boolVal(row.IsRunning())
+			return emitJSON(out)
+		}
+		var d time.Duration
+		for _, r := range banked {
+			d += r.Duration
 		}
 		fmt.Println(tasksOK.Render(fmt.Sprintf("Archived %s on #%d %q", plural(len(banked), "session"), t.Seq, t.Name)) +
 			tasksMuted.Render(" banking ") + tasksAccent.Render(fmtDuration(d)))
@@ -547,6 +622,10 @@ var tasksSessionArchiveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if jsonEnabled {
+			sess := sessionJSONOf(row)
+			return emitJSON(actionJSON{Action: "session_archived", Session: &sess})
+		}
 		fmt.Println(tasksOK.Render(fmt.Sprintf("Archived session s%d", row.Seq)) +
 			tasksMuted.Render(" banking ") + tasksAccent.Render(fmtShort(row.Duration)))
 		return nil
@@ -565,6 +644,10 @@ var tasksSessionUnarchiveCmd = &cobra.Command{
 		row, err := s.UnarchiveSession(ctx, seq)
 		if err != nil {
 			return err
+		}
+		if jsonEnabled {
+			sess := sessionJSONOf(row)
+			return emitJSON(actionJSON{Action: "session_restored", Session: &sess})
 		}
 		fmt.Println(tasksOK.Render(fmt.Sprintf("Restored session s%d", row.Seq)) +
 			tasksMuted.Render(" adding back ") + tasksAccent.Render(fmtShort(row.Duration)))
@@ -591,6 +674,10 @@ var tasksSessionCloseCmd = &cobra.Command{
 			return err
 		}
 		row := tasks.SessionOf(sess)
+		if jsonEnabled {
+			j := sessionJSONOf(row)
+			return emitJSON(actionJSON{Action: "session_closed", Session: &j})
+		}
 		fmt.Println(tasksOK.Render(fmt.Sprintf("Closed session s%d", row.Seq)) + " " +
 			tasksMuted.Render("ran ") + tasksAccent.Render(fmtShort(row.Duration)))
 		return nil
@@ -611,6 +698,12 @@ var tasksSessionRmCmd = &cobra.Command{
 		}
 		if err := s.DeleteSession(ctx, seq); err != nil {
 			return err
+		}
+		if jsonEnabled {
+			return emitJSON(map[string]any{
+				"action":  "session_deleted",
+				"session": map[string]any{"seq": seq},
+			})
 		}
 		fmt.Println(tasksWarn.Render(fmt.Sprintf("Deleted session s%d", seq)))
 		return nil
@@ -649,6 +742,10 @@ var tasksSessionEditCmd = &cobra.Command{
 			return err
 		}
 		row := tasks.SessionOf(sess)
+		if jsonEnabled {
+			j := sessionJSONOf(row)
+			return emitJSON(actionJSON{Action: "session_updated", Session: &j})
+		}
 		fmt.Println(tasksOK.Render(fmt.Sprintf("Updated session s%d", row.Seq)) + " " +
 			tasksMuted.Render("now ") + tasksAccent.Render(fmtShort(row.Duration)))
 		return nil
@@ -663,6 +760,12 @@ var tasksDoctorCmd = &cobra.Command{
 		bad, err := s.Doctor(ctx)
 		if err != nil {
 			return err
+		}
+		if jsonEnabled {
+			return emitJSON(map[string]any{
+				"consistent":   len(bad) == 0,
+				"inconsistent": doctorJSONList(bad),
+			})
 		}
 		if len(bad) == 0 {
 			fmt.Println(tasksOK.Render("All tasks consistent with their sessions."))
@@ -687,6 +790,9 @@ var tasksTruncateCmd = &cobra.Command{
 		if err := s.TruncateAll(ctx); err != nil {
 			return err
 		}
+		if jsonEnabled {
+			return emitJSON(actionJSON{Action: "truncated", Message: "all task data removed"})
+		}
 		fmt.Println(tasksWarn.Render("All task data removed."))
 		return nil
 	}),
@@ -697,6 +803,9 @@ var tasksTuiCmd = &cobra.Command{
 	Short: "Full-screen interactive task view",
 	Args:  cobra.NoArgs,
 	RunE: runWithStore(func(ctx context.Context, s *tasks.Store, _ []string) error {
+		if jsonEnabled {
+			return errJSONUnsupported("the interactive TUI")
+		}
 		return taskInteractiveLoop(ctx, s)
 	}),
 }

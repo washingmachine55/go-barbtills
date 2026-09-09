@@ -66,77 +66,83 @@ func runGitCmd(cmd string) {
 		fmt.Fprintln(os.Stdout, fmt.Sprint(res))
 	}
 }
+
+// gitRepoStatus is one repo's porcelain status, grouped by what happened to
+// each file.
+type gitRepoStatus struct {
+	Path      string   `json:"path"`
+	RepoName  string   `json:"repo_name"`
+	Modified  []string `json:"modified"`
+	Untracked []string `json:"untracked"`
+	Added     []string `json:"added"`
+	Deleted   []string `json:"deleted"`
+}
+
 func runGitStatus() {
 	var sf []byte = ReadOrCreateStorageFile(DefaultStoragePath + DefaultStorageFileName)
 	data := strings.Split(string(sf), "\n")
+	repos := make([]gitRepoStatus, 0, max(len(data)-1, 0))
 	for i := range len(data) - 1 {
 		compose := fmt.Sprintf("--git-dir %s.git --work-tree %s", data[i], data[i])
 		res := cmdHelper.ExecCommand("git", compose, "status --porcelain")
+		repos = append(repos, parseGitStatus(data[i], res))
+	}
 
-		getRepoName := func() string {
-			var repoName string
-			dirs := strings.Split(data[i], "/")
-			repoName = dirs[len(dirs)-2]
-			return repoName
+	// JSON goes to stdout as one document, so `barbtils context git -s -j | jq`
+	// needs no 2>&1 and never has a log line spliced into it.
+	if jsonEnabled {
+		if err := emitJSON(map[string]any{
+			"repos": repos,
+			"count": len(repos),
+		}); err != nil {
+			l.Logger.Fatal("Error while writing JSON output", "Error", err)
 		}
+		return
+	}
 
-		type StatusEntries struct {
-			modifiedFiles, untrackedFiles, addedFiles, deletedFiles []string
-		}
-		gitStatusEntries := func() StatusEntries {
-			statusEntries := strings.Split(res, "\n")
-			var modifiedFiles, untrackedFiles, addedFiles, deletedFiles []string
-			for i := range statusEntries {
-				if strings.HasPrefix(strings.TrimSpace(statusEntries[i]), "M") {
-					trimAndClean := strings.Trim(strings.TrimSpace(statusEntries[i]), " M ")
-					modifiedFiles = append(modifiedFiles, trimAndClean)
-				}
-				if strings.HasPrefix(strings.TrimSpace(statusEntries[i]), "??") {
-					trimAndClean := strings.Trim(strings.TrimSpace(statusEntries[i]), "?? ")
-					untrackedFiles = append(untrackedFiles, trimAndClean)
-				}
-				if strings.HasPrefix(strings.TrimSpace(statusEntries[i]), "A") {
-					trimAndClean := strings.Trim(strings.TrimSpace(statusEntries[i]), " A ")
-					addedFiles = append(addedFiles, trimAndClean)
-				}
-				if strings.HasPrefix(strings.TrimSpace(statusEntries[i]), "D") {
-					trimAndClean := strings.Trim(strings.TrimSpace(statusEntries[i]), " D ")
-					deletedFiles = append(deletedFiles, trimAndClean)
-				}
-			}
-			return StatusEntries{
-				modifiedFiles:  modifiedFiles,
-				untrackedFiles: untrackedFiles,
-				addedFiles:     addedFiles,
-				deletedFiles:   deletedFiles,
-			}
-		}
+	for _, r := range repos {
+		l.Logger.Info(
+			"[Results]",
+			"path", r.Path,
+			"repo_name", r.RepoName,
+			"modified", r.Modified,
+			"untracked", r.Untracked,
+			"added", r.Added,
+			"deleted", r.Deleted,
+		)
+	}
+}
 
-		result := map[string]any{
-			"modified":  gitStatusEntries().modifiedFiles,
-			"untracked": gitStatusEntries().untrackedFiles,
-			"added":     gitStatusEntries().addedFiles,
-			"deleted":   gitStatusEntries().deletedFiles,
-		}
-		if jsonEnabled {
-			l.Logger.Info(
-				"[Results]",
-				"path", data[i],
-				"repo_name", getRepoName(),
-				"result", result,
-			)
-		} else {
-			l.Logger.Info(
-				"[Results]",
-				"path", data[i],
-				"repo_name", getRepoName(),
-				"modified", gitStatusEntries().modifiedFiles,
-				"untracked", gitStatusEntries().untrackedFiles,
-				"added", gitStatusEntries().addedFiles,
-				"deleted", gitStatusEntries().deletedFiles,
-			)
+// parseGitStatus groups the lines of `git status --porcelain` by change type.
+// Empty groups stay as [], so a JSON consumer can iterate them unconditionally.
+func parseGitStatus(path, porcelain string) gitRepoStatus {
+	repoName := path
+	if dirs := strings.Split(path, "/"); len(dirs) >= 2 {
+		repoName = dirs[len(dirs)-2]
+	}
+
+	status := gitRepoStatus{
+		Path:      path,
+		RepoName:  repoName,
+		Modified:  []string{},
+		Untracked: []string{},
+		Added:     []string{},
+		Deleted:   []string{},
+	}
+	for _, line := range strings.Split(porcelain, "\n") {
+		entry := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(entry, "??"):
+			status.Untracked = append(status.Untracked, strings.Trim(entry, "?? "))
+		case strings.HasPrefix(entry, "M"):
+			status.Modified = append(status.Modified, strings.Trim(entry, " M "))
+		case strings.HasPrefix(entry, "A"):
+			status.Added = append(status.Added, strings.Trim(entry, " A "))
+		case strings.HasPrefix(entry, "D"):
+			status.Deleted = append(status.Deleted, strings.Trim(entry, " D "))
 		}
 	}
+	return status
 }
 
 func WriteGitShit(filePath string) {

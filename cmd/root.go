@@ -61,14 +61,20 @@ Use this at your own risk lol.`,
 		}
 	},
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		// Debug first: it sets a human clock format that --json then replaces with
+		// RFC3339, so `-d -j` still emits timestamps a parser accepts.
+		debug, _ := cmd.Flags().GetBool("debug")
+		if debug {
+			l.LoggerSetLevelDebug()
+		}
 		json, _ := cmd.Flags().GetBool("json")
 		if json {
 			jsonEnabled = true
 			l.LoggerSetOutputJson()
 		}
-		debug, _ := cmd.Flags().GetBool("debug")
 		if debug {
-			l.LoggerSetLevelDebug()
+			// Announced only once the formatter is settled, so the first debug
+			// line is not the one line of plain text in a JSON stream.
 			l.Logger.Debug("Logger Set to Debug")
 		}
 		initConfig()
@@ -86,6 +92,14 @@ func Execute() {
 	defer stop()
 
 	if err := RootCmd.ExecuteContext(ctx); err != nil {
+		// Cobra's own error print is silenced (see init), so that --json can
+		// answer with a parseable failure instead of a bare sentence. It goes to
+		// stderr either way, leaving stdout to hold only the command's document.
+		if jsonEnabled {
+			_ = encodeJSON(os.Stderr, map[string]any{"error": err.Error()})
+		} else {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+		}
 		os.Exit(1)
 	}
 }
@@ -95,6 +109,8 @@ func init() {
 	// executed command and the root silence it. A failed action is not a usage
 	// mistake, so the message should stand alone.
 	RootCmd.SilenceUsage = true
+	// Execute() prints the error itself, so it can be JSON when --json is set.
+	RootCmd.SilenceErrors = true
 
 	cobra.OnInitialize(l.LoggerInit)
 	// cobra.OnInitialize(initDB)
@@ -105,7 +121,7 @@ func init() {
 
 	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", DefaultConfigPath, "config file path")
 	RootCmd.PersistentFlags().BoolP("debug", "d", false, "Set Log level to debug. Can be used with any command and subcommands")
-	RootCmd.PersistentFlags().BoolVarP(&jsonEnabled, "json", "j", false, "Set Log formatter to json. Can be used with any command and subcommands")
+	RootCmd.PersistentFlags().BoolVarP(&jsonEnabled, "json", "j", false, "Emit machine-readable JSON: command output on stdout, logs and errors as JSON on stderr. Can be used with any command and subcommands")
 	RootCmd.PersistentFlags().BoolP("version", "v", false, "Print app version")
 
 	// Cobra also supports local flags, which will only run
