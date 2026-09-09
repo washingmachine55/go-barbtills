@@ -2,6 +2,7 @@ package logger
 
 import (
 	"os"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
@@ -33,8 +34,18 @@ func LoggerInit() {
 	Logger.SetStyles(styles)
 }
 
+func LoggerSetOutputJson() {
+	Logger.SetFormatter(log.JSONFormatter)
+	Logger.SetReportTimestamp(true)
+	Logger.SetTimeFormat(time.RFC3339)
+}
+
 func LoggerSetLevelDebug() {
 	Logger.SetLevel(log.DebugLevel)
+	Logger.SetReportTimestamp(true)
+	Logger.SetTimeFormat("[03:04:05 PM]")
+	Logger.SetReportCaller(true)
+	Logger.SetCallerFormatter(log.LongCallerFormatter)
 }
 
 // Debug prints a debug message.

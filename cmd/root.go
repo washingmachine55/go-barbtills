@@ -25,6 +25,7 @@ var DefaultStoragePath string = cmdHelper.OSHostName + "/.local/share/barbtils/"
 const DefaultStorageFileName string = "gitshit"
 
 var cfgFile string = DefaultConfigPath
+var jsonEnabled bool
 
 var (
 	asciiArt      string
@@ -60,6 +61,11 @@ Use this at your own risk lol.`,
 		}
 	},
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		json, _ := cmd.Flags().GetBool("json")
+		if json {
+			jsonEnabled = true
+			l.LoggerSetOutputJson()
+		}
 		debug, _ := cmd.Flags().GetBool("debug")
 		if debug {
 			l.LoggerSetLevelDebug()
@@ -99,6 +105,7 @@ func init() {
 
 	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", DefaultConfigPath, "config file path")
 	RootCmd.PersistentFlags().BoolP("debug", "d", false, "Set Log level to debug. Can be used with any command and subcommands")
+	RootCmd.PersistentFlags().BoolVarP(&jsonEnabled, "json", "j", false, "Set Log formatter to json. Can be used with any command and subcommands")
 	RootCmd.PersistentFlags().BoolP("version", "v", false, "Print app version")
 
 	// Cobra also supports local flags, which will only run

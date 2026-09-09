@@ -70,11 +70,72 @@ func runGitStatus() {
 	var sf []byte = ReadOrCreateStorageFile(DefaultStoragePath + DefaultStorageFileName)
 	data := strings.Split(string(sf), "\n")
 	for i := range len(data) - 1 {
-		// git --git-dir /home/hmed42/Work/3-week-plan/.git --work-tree /home/hmed42/Work/3-week-plan/ status
 		compose := fmt.Sprintf("--git-dir %s.git --work-tree %s", data[i], data[i])
 		res := cmdHelper.ExecCommand("git", compose, "status --porcelain")
-		l.Logger.Info("[Results]", "for", data[i])
-		fmt.Fprintln(os.Stdout, fmt.Sprint(res))
+
+		getRepoName := func() string {
+			var repoName string
+			dirs := strings.Split(data[i], "/")
+			repoName = dirs[len(dirs)-2]
+			return repoName
+		}
+
+		type StatusEntries struct {
+			modifiedFiles, untrackedFiles, addedFiles, deletedFiles []string
+		}
+		gitStatusEntries := func() StatusEntries {
+			statusEntries := strings.Split(res, "\n")
+			var modifiedFiles, untrackedFiles, addedFiles, deletedFiles []string
+			for i := range statusEntries {
+				if strings.HasPrefix(strings.TrimSpace(statusEntries[i]), "M") {
+					trimAndClean := strings.Trim(strings.TrimSpace(statusEntries[i]), " M ")
+					modifiedFiles = append(modifiedFiles, trimAndClean)
+				}
+				if strings.HasPrefix(strings.TrimSpace(statusEntries[i]), "??") {
+					trimAndClean := strings.Trim(strings.TrimSpace(statusEntries[i]), "?? ")
+					untrackedFiles = append(untrackedFiles, trimAndClean)
+				}
+				if strings.HasPrefix(strings.TrimSpace(statusEntries[i]), "A") {
+					trimAndClean := strings.Trim(strings.TrimSpace(statusEntries[i]), " A ")
+					addedFiles = append(addedFiles, trimAndClean)
+				}
+				if strings.HasPrefix(strings.TrimSpace(statusEntries[i]), "D") {
+					trimAndClean := strings.Trim(strings.TrimSpace(statusEntries[i]), " D ")
+					deletedFiles = append(deletedFiles, trimAndClean)
+				}
+			}
+			return StatusEntries{
+				modifiedFiles:  modifiedFiles,
+				untrackedFiles: untrackedFiles,
+				addedFiles:     addedFiles,
+				deletedFiles:   deletedFiles,
+			}
+		}
+
+		result := map[string]any{
+			"modified":  gitStatusEntries().modifiedFiles,
+			"untracked": gitStatusEntries().untrackedFiles,
+			"added":     gitStatusEntries().addedFiles,
+			"deleted":   gitStatusEntries().deletedFiles,
+		}
+		if jsonEnabled {
+			l.Logger.Info(
+				"[Results]",
+				"path", data[i],
+				"repo_name", getRepoName(),
+				"result", result,
+			)
+		} else {
+			l.Logger.Info(
+				"[Results]",
+				"path", data[i],
+				"repo_name", getRepoName(),
+				"modified", gitStatusEntries().modifiedFiles,
+				"untracked", gitStatusEntries().untrackedFiles,
+				"added", gitStatusEntries().addedFiles,
+				"deleted", gitStatusEntries().deletedFiles,
+			)
+		}
 	}
 }
 
@@ -125,14 +186,14 @@ func hasGit(dirs []os.DirEntry) bool {
 }
 
 func ReadOrCreateStorageFile(filePath string) []byte {
-	texo, err := os.ReadFile(filePath)
+	storageTextFile, err := os.ReadFile(filePath)
 	if err != nil {
 		l.Logger.Warn("Error while trying to read file", "Error", err)
 		l.Logger.Debug("Proceeding to create a file...")
 
-		tex, erar := os.Create(DefaultStoragePath + DefaultStorageFileName)
-		if erar != nil {
-			l.Logger.Warn("Error while trying to create file", "Error", erar)
+		createStorageTextFile, err := os.Create(DefaultStoragePath + DefaultStorageFileName)
+		if err != nil {
+			l.Logger.Warn("Error while trying to create file", "Error", err)
 			l.Logger.Debug("Proceeding to create a directory...")
 
 			errMkDir := os.MkdirAll(DefaultStoragePath, 0755)
@@ -140,7 +201,7 @@ func ReadOrCreateStorageFile(filePath string) []byte {
 				l.Logger.Fatal("Error while trying to create a directory", "Error", errMkDir)
 			}
 		}
-		tex.Close()
+		createStorageTextFile.Close()
 	}
-	return texo
+	return storageTextFile
 }
