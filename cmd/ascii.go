@@ -38,7 +38,7 @@ var asciiCmd = &cobra.Command{
 			}
 		}
 		if asciiOptsAdditional {
-			findAdditionalFonts()
+			// findAdditionalFonts("/usr/share/figlet/")
 		}
 		val := asciiArt
 		if val == "-" {
@@ -120,23 +120,35 @@ func printFontTable() {
 	w.Flush()
 }
 
-func findAdditionalFonts(dir string) {
-	var availableFonts []os.DirEntry
-	if dir != "" {
-		if availableFonts, err := os.ReadDir("/usr/share/figlet/"); err != nil {
-			return
-		}
-	}
-	if err != nil {
-		l.Fatalf("error in finding additonal fonts: %w", err)
-	}
-	var fontNames []string
-	for _, v := range availableFonts {
-		fontNames = append(fontNames, strings.TrimSpace(v.Name()))
-	}
-	if jsonEnabled {
-		emitJSON(map[string]any{
-			"available_fonts": fontNames,
-		})
-	}
-}
+// func findAdditionalFonts(dir string) {
+// 	getAvailableFonts := func() (font []string, error error) {
+// 		var availableFontsNames []string
+// 		if dir == "" {
+// 			if availableFonts, err := os.ReadDir("/usr/share/figlet/"); err != nil {
+// 				for i := range availableFonts {
+// 					l.Info("entries", availableFonts)
+// 					availableFontsNames = append(availableFontsNames, strings.TrimSpace(availableFonts[i].Name()))
+// 				}
+// 				return nil, fmt.Errorf("error in finding additonal fonts: %w", err)
+// 			}
+// 		} else {
+// 			if availableFonts, err := os.ReadDir(dir); err != nil {
+// 				for i := range availableFonts {
+// 					l.Info("entries", availableFonts)
+// 					availableFontsNames = append(availableFontsNames, strings.TrimSpace(availableFonts[i].Name()))
+// 				}
+// 				return nil, fmt.Errorf("error in finding additonal fonts: %w", err)
+// 			}
+// 		}
+// 		return availableFontsNames, nil
+// 	}
+// 	fontNames, err := getAvailableFonts()
+// 	if err != nil {
+// 		l.Fatal(err)
+// 	}
+// 	if jsonEnabled {
+// 		emitJSON(map[string]any{
+// 			"available_fonts": fontNames,
+// 		})
+// 	}
+// }

@@ -17,7 +17,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-const APP_VERSION string = "1.81.20260427"
+const APP_VERSION string = "1.82.20260910"
 
 var DefaultConfigPath string = cmdHelper.OSHostName + "/.config/barbtils/config.toml"
 var DefaultStoragePath string = cmdHelper.OSHostName + "/.local/share/barbtils/"
@@ -122,7 +122,7 @@ func init() {
 
 	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", DefaultConfigPath, "config file path")
 	RootCmd.PersistentFlags().BoolP("debug", "d", false, "Set Log level to debug. Can be used with any command and subcommands")
-	RootCmd.PersistentFlags().BoolVarP(&jsonEnabled, "json", "j", false, "Emit machine-readable JSON: command output on stdout, logs and errors as JSON on stderr. Can be used with any command and subcommands")
+	RootCmd.PersistentFlags().BoolVarP(&jsonEnabled, "json", "j", false, "Emit machine-readable JSON: command output on stdout, logs and errors as JSON on stderr.\nCan be used with any command and subcommands")
 	RootCmd.PersistentFlags().BoolP("version", "v", false, "Print app version")
 
 	// Cobra also supports local flags, which will only run
