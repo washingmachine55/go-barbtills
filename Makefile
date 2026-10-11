@@ -11,7 +11,7 @@ ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 # Turn arguments into dummy targets so Make doesn't throw a "No rule to make target" error
 $(eval $(ARGS):;@:)
 
-.PHONY: migrate sqlc build vet test check tidy
+.PHONY: migrate sqlc build vet test check tidy genKey
 
 migrate:
 	go tool goose $(GOOSE_DRIVER) "$(DB_URL)" -dir $(GOOSE_MIGRATION_DIR) $(ARGS)
@@ -30,5 +30,8 @@ test:
 
 tidy:
 	go mod tidy
+
+genKey:
+	sh ./internal/genKey.sh
 
 check: sqlc vet build test
