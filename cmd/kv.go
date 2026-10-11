@@ -8,6 +8,7 @@ import (
 	l "barbtils/internal/logger"
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -20,38 +21,44 @@ import (
 
 // kvCmd represents the kv command
 var kvCmd = &cobra.Command{
-	Use:   "kv",
-	Short: "A brief description of your command",
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
-	Run: func(cmd *cobra.Command, args []string) {
-
+	Use:                   "kv",
+	Short:                 "Create and consume Key-Value Pairs with AES-GCM Encryption and Decryption",
+	DisableFlagParsing:    true,
+	DisableFlagsInUseLine: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cmd.Help()
+		// return fmt.Errorf("unknown subcommand %q", args[0])
 	},
 }
 
 var addCmd = &cobra.Command{
-	Use:   "add",
-	Short: "A brief description of your command",
+	Use: "add",
+	Short: `Create KV pair by inputting your Key.
+	      Its value can be entered by Stdin after the command is invoked`,
+	DisableFlagParsing:    true,
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		if len(args) > 1 || len(args) == 0 {
-			l.Fatal("Key must be a single string")
-		}
 		pairToAppend(args[0])
 	},
 }
 
 var getCmd = &cobra.Command{
-	Use:   "get",
-	Short: "A brief description of your command",
+	Use:                   "get",
+	Short:                 "Get KV pair by inputting your Key",
+	DisableFlagParsing:    true,
+	DisableFlagsInUseLine: true,
+	Args:                  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if len(args) > 1 || len(args) == 0 {
-			l.Fatal("Key must be a single string")
+			// l.Fatal()
+			errors.New("Key must be a single string")
 		}
 		readKvFile(args[0])
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.Help()
+		return errors.New("Key must be a single string")
 	},
 }
 
@@ -59,6 +66,27 @@ func init() {
 	RootCmd.AddCommand(kvCmd)
 	kvCmd.AddCommand(addCmd)
 	kvCmd.AddCommand(getCmd)
+
+	kvCmd.SetHelpFunc(func(command *cobra.Command, strings []string) {
+		_ = command.Flags().MarkHidden("config")     // Replace with your flag's name
+		_ = command.Flags().MarkHidden("debug")      // Replace with your flag's name
+		_ = command.Flags().MarkHidden("get_db_uri") // Replace with your flag's name
+		_ = command.Flags().MarkHidden("json")       // Replace with your flag's name
+		_ = command.Flags().MarkHidden("version")    // Replace with your flag's name
+		command.Parent().HelpFunc()(command, strings)
+	})
+}
+
+func initKvFile() (*os.File, *bufio.Scanner) {
+	f, err := os.OpenFile("kv.txt", os.O_RDONLY, 0644)
+	if err != nil {
+		l.Fatal(err)
+	}
+	defer f.Close()
+
+	scannerFile := bufio.NewScanner(f)
+
+	return f, scannerFile
 }
 
 func readFullKvFile(s string) {
@@ -101,12 +129,13 @@ func readKvFile(input string) {
 
 		lines, err := encryption.Decrypt([]byte(rawLine))
 		if err != nil {
-			fmt.Errorf("Could not Decryupt: %v", err)
+			fmt.Errorf("Could not Decrypt: %v", err)
 		}
 
-		if strings.HasPrefix(string(lines), input) {
-			after, _ := strings.CutPrefix(string(lines), input+":")
-			fmt.Printf("%v\n", after)
+		key, value, _ := strings.Cut(string(lines), ":")
+
+		if key == input {
+			fmt.Printf("%v\n", value)
 		}
 	}
 
