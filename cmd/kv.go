@@ -8,7 +8,6 @@ import (
 	l "barbtils/internal/logger"
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -27,7 +26,6 @@ var kvCmd = &cobra.Command{
 	DisableFlagsInUseLine: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return cmd.Help()
-		// return fmt.Errorf("unknown subcommand %q", args[0])
 	},
 }
 
@@ -51,14 +49,10 @@ var getCmd = &cobra.Command{
 	Args:                  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if len(args) > 1 || len(args) == 0 {
-			// l.Fatal()
-			errors.New("Key must be a single string")
+			l.Fatal("Key must be a single string")
+			// errors.New("Key must be a single string")
 		}
 		readKvFile(args[0])
-	},
-	RunE: func(cmd *cobra.Command, args []string) error {
-		cmd.Help()
-		return errors.New("Key must be a single string")
 	},
 }
 
@@ -67,14 +61,14 @@ func init() {
 	kvCmd.AddCommand(addCmd)
 	kvCmd.AddCommand(getCmd)
 
-	kvCmd.SetHelpFunc(func(command *cobra.Command, strings []string) {
-		_ = command.Flags().MarkHidden("config")     // Replace with your flag's name
-		_ = command.Flags().MarkHidden("debug")      // Replace with your flag's name
-		_ = command.Flags().MarkHidden("get_db_uri") // Replace with your flag's name
-		_ = command.Flags().MarkHidden("json")       // Replace with your flag's name
-		_ = command.Flags().MarkHidden("version")    // Replace with your flag's name
-		command.Parent().HelpFunc()(command, strings)
-	})
+	// kvCmd.SetHelpFunc(func(command *cobra.Command, strings []string) {
+	// 	_ = command.Flags().MarkHidden("config")     // Replace with your flag's name
+	// 	_ = command.Flags().MarkHidden("debug")      // Replace with your flag's name
+	// 	_ = command.Flags().MarkHidden("get_db_uri") // Replace with your flag's name
+	// 	_ = command.Flags().MarkHidden("json")       // Replace with your flag's name
+	// 	_ = command.Flags().MarkHidden("version")    // Replace with your flag's name
+	// 	command.Parent().HelpFunc()(command, strings)
+	// })
 }
 
 func initKvFile() (*os.File, *bufio.Scanner) {
@@ -90,7 +84,6 @@ func initKvFile() (*os.File, *bufio.Scanner) {
 }
 
 func readFullKvFile(s string) {
-
 	f, err := os.OpenFile("kv.txt", os.O_RDONLY, 0644)
 	if err != nil {
 		l.Fatal(err)
@@ -109,11 +102,9 @@ func readFullKvFile(s string) {
 	if err := scannerFile.Err(); err != nil {
 		log.Fatalf("error during scanning: %s", err)
 	}
-
 }
 
 func readKvFile(input string) {
-
 	input = strings.TrimSpace(input)
 
 	f, err := os.OpenFile("kv.txt", os.O_RDONLY, 0644)
@@ -142,10 +133,13 @@ func readKvFile(input string) {
 	if err := scannerFile.Err(); err != nil {
 		log.Fatalf("error during scanning: %s", err)
 	}
-
 }
 
 func writeKvPair(keyInput string) string {
+	err := scanForExistingKey(keyInput)
+	if err != nil {
+		l.Fatal(err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -183,7 +177,6 @@ func writeKvPair(keyInput string) string {
 }
 
 func pairToAppend(s string) {
-
 	kvPair := writeKvPair(s)
 
 	f, err := os.OpenFile("kv.txt", os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
@@ -209,4 +202,37 @@ func pairToAppend(s string) {
 		fmt.Errorf("Error flushing buffer:", err)
 		return
 	}
+}
+
+func scanForExistingKey(input string) error {
+	f, err := os.OpenFile("kv.txt", os.O_RDONLY, 0644)
+	if err != nil {
+		l.Fatal(err)
+		return err
+	}
+	defer f.Close()
+
+	scannerFile := bufio.NewScanner(f)
+
+	for scannerFile.Scan() {
+		rawLine := strings.TrimSpace(scannerFile.Text())
+
+		lines, err := encryption.Decrypt([]byte(rawLine))
+		if err != nil {
+			return fmt.Errorf("Could not Decrypt: %v", err)
+		}
+
+		key, _, found := strings.Cut(string(lines), ":")
+
+		if found && key == input {
+			return fmt.Errorf("Key [%s] already exists, please use a new key", key)
+		}
+	}
+
+	if err := scannerFile.Err(); err != nil {
+		log.Fatalf("error during scanning: %s", err)
+		return err
+	}
+
+	return nil
 }
