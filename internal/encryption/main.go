@@ -12,7 +12,7 @@ import (
 // Encrypt encrypts plaintext using AES-GCM with the provided key.
 // The key must be 16, 24, or 32 bytes long (AES-128, AES-192, or AES-256).
 func Encrypt(plaintext []byte) ([]byte, error) {
-	decodedKey, err := hex.DecodeString(key)
+	decodedKey, err := hex.DecodeString(getEncryptionKey())
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +40,7 @@ func Encrypt(plaintext []byte) ([]byte, error) {
 
 // Decrypt decrypts a ciphertext prepended with its nonce using AES-GCM.
 func Decrypt(ciphertextAndNonce []byte) ([]byte, error) {
-	decodedKey, err := hex.DecodeString(key)
+	decodedKey, err := hex.DecodeString(getEncryptionKey())
 	if err != nil {
 		return nil, err
 	}

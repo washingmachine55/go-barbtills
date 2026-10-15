@@ -16,7 +16,10 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
+
+var kvFilePath string
 
 // kvCmd represents the kv command
 var kvCmd = &cobra.Command{
@@ -30,29 +33,79 @@ var kvCmd = &cobra.Command{
 }
 
 var addCmd = &cobra.Command{
-	Use: "add",
+	Use:     "add",
+	Aliases: []string{"a"},
 	Short: `Create KV pair by inputting your Key.
 	      Its value can be entered by Stdin after the command is invoked`,
 	DisableFlagParsing:    true,
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.ExactArgs(1),
+	PreRun: func(cmd *cobra.Command, args []string) {
+		kvFilePath = viper.GetString("kv.filePath")
+	},
 	Run: func(cmd *cobra.Command, args []string) {
-		pairToAppend(args[0])
+		if len(args) > 1 || len(args) == 0 {
+			l.Fatal("Key must be a single string")
+		}
+		if len(args) == 1 {
+			userInput := strings.TrimSpace(args[0])
+			if userInput == "" {
+				l.Fatal("Key must not be an empty string")
+			} else {
+				pairToAppend(userInput)
+			}
+		}
+	},
+}
+
+var deleteCmd = &cobra.Command{
+	Use:     "delete",
+	Aliases: []string{"del", "d"},
+	Short:   `Delete KV pair by inputting your Key as an argument`,
+	// DisableFlagParsing:    true,
+	// DisableFlagsInUseLine: true,
+	Args: cobra.ExactArgs(1),
+	PreRun: func(cmd *cobra.Command, args []string) {
+		kvFilePath = viper.GetString("kv.filePath")
+	},
+	Run: func(cmd *cobra.Command, args []string) {
+		if len(args) > 1 || len(args) == 0 {
+			l.Fatal("Key must be a single string")
+		}
+		if len(args) == 1 {
+			userInput := strings.TrimSpace(args[0])
+			if userInput == "" {
+				l.Fatal("Key must not be an empty string")
+			} else {
+				err := deleteExistingKey(userInput)
+				if err != nil {
+					err.Error()
+				}
+			}
+		}
 	},
 }
 
 var getCmd = &cobra.Command{
 	Use:                   "get",
-	Short:                 "Get KV pair by inputting your Key",
+	Short:                 "Get KV pair by inputting your Key as an argument",
 	DisableFlagParsing:    true,
 	DisableFlagsInUseLine: true,
-	Args:                  cobra.ExactArgs(1),
+	Args:                  cobra.RangeArgs(0, 1),
+	PreRun: func(cmd *cobra.Command, args []string) {
+		kvFilePath = viper.GetString("kv.filePath")
+	},
 	Run: func(cmd *cobra.Command, args []string) {
-		if len(args) > 1 || len(args) == 0 {
+		if len(args) > 1 {
 			l.Fatal("Key must be a single string")
 			// errors.New("Key must be a single string")
 		}
-		readKvFile(args[0])
+		if len(args) == 0 {
+			readFullKvFile()
+		}
+		if len(args) == 1 {
+			readKvFile(args[0])
+		}
 	},
 }
 
@@ -60,6 +113,7 @@ func init() {
 	RootCmd.AddCommand(kvCmd)
 	kvCmd.AddCommand(addCmd)
 	kvCmd.AddCommand(getCmd)
+	kvCmd.AddCommand(deleteCmd)
 
 	// kvCmd.SetHelpFunc(func(command *cobra.Command, strings []string) {
 	// 	_ = command.Flags().MarkHidden("config")     // Replace with your flag's name
@@ -72,7 +126,7 @@ func init() {
 }
 
 func initKvFile() (*os.File, *bufio.Scanner) {
-	f, err := os.OpenFile("kv.txt", os.O_RDONLY, 0644)
+	f, err := os.OpenFile(kvFilePath, os.O_RDONLY, 0644)
 	if err != nil {
 		l.Fatal(err)
 	}
@@ -83,8 +137,8 @@ func initKvFile() (*os.File, *bufio.Scanner) {
 	return f, scannerFile
 }
 
-func readFullKvFile(s string) {
-	f, err := os.OpenFile("kv.txt", os.O_RDONLY, 0644)
+func readFullKvFile() {
+	f, err := os.OpenFile(kvFilePath, os.O_RDONLY, 0644)
 	if err != nil {
 		l.Fatal(err)
 	}
@@ -93,9 +147,16 @@ func readFullKvFile(s string) {
 	scannerFile := bufio.NewScanner(f)
 
 	for scannerFile.Scan() {
-		// scanner.Text() returns the current line as a string (excluding \n)
-		line := scannerFile.Text()
-		fmt.Println(line)
+		rawLine := strings.TrimSpace(scannerFile.Text())
+
+		lines, err := encryption.Decrypt([]byte(rawLine))
+		if err != nil {
+			fmt.Errorf("Could not Decrypt: %v", err)
+		}
+
+		key, _, _ := strings.Cut(string(lines), ":")
+
+		fmt.Printf("key: %v\n", key)
 	}
 
 	// 5. Check for errors that occurred during scanning
@@ -107,7 +168,7 @@ func readFullKvFile(s string) {
 func readKvFile(input string) {
 	input = strings.TrimSpace(input)
 
-	f, err := os.OpenFile("kv.txt", os.O_RDONLY, 0644)
+	f, err := os.OpenFile(kvFilePath, os.O_RDONLY, 0644)
 	if err != nil {
 		l.Fatal(err)
 	}
@@ -179,7 +240,7 @@ func writeKvPair(keyInput string) string {
 func pairToAppend(s string) {
 	kvPair := writeKvPair(s)
 
-	f, err := os.OpenFile("kv.txt", os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	f, err := os.OpenFile(kvFilePath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		l.Fatal(err)
 	}
@@ -205,7 +266,7 @@ func pairToAppend(s string) {
 }
 
 func scanForExistingKey(input string) error {
-	f, err := os.OpenFile("kv.txt", os.O_RDONLY, 0644)
+	f, err := os.OpenFile(kvFilePath, os.O_RDONLY, 0644)
 	if err != nil {
 		l.Fatal(err)
 		return err
@@ -233,6 +294,58 @@ func scanForExistingKey(input string) error {
 		log.Fatalf("error during scanning: %s", err)
 		return err
 	}
+
+	return nil
+}
+
+func deleteExistingKey(input string) error {
+	f, err := os.OpenFile(kvFilePath, os.O_RDONLY, 0644)
+	if err != nil {
+		l.Fatal(err)
+		return err
+	}
+	defer f.Close()
+
+	scannerFile := bufio.NewScanner(f)
+
+	var newLines []string
+	for scannerFile.Scan() {
+		rawLine := strings.TrimSpace(scannerFile.Text())
+
+		lines, err := encryption.Decrypt([]byte(rawLine))
+		if err != nil {
+			return fmt.Errorf("Could not Decrypt: %v", err)
+		}
+
+		key, _, found := strings.Cut(string(lines), ":")
+
+		if found && key != input {
+			newLines = append(newLines, rawLine)
+		}
+	}
+
+	if err := scannerFile.Err(); err != nil {
+		log.Fatalf("error during scanning: %s", err)
+		return err
+	}
+
+	// Overwrite the file with the filtered lines
+	outFile, err := os.Create(kvFilePath)
+	if err != nil {
+		fmt.Println("Error creating file:", err)
+		return err
+	}
+	defer outFile.Close()
+
+	writer := bufio.NewWriter(outFile)
+	for _, line := range newLines {
+		_, err := writer.WriteString(string(line) + "\n")
+		if err != nil {
+			fmt.Println("Error writing file:", err)
+			return err
+		}
+	}
+	writer.Flush()
 
 	return nil
 }

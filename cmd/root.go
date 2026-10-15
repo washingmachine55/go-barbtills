@@ -17,7 +17,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-const APP_VERSION string = "1.81.20260427"
+const APP_VERSION string = "1.82.20261016"
 
 var DefaultConfigPath string = cmdHelper.OSHostName + "/.config/barbtils/config.toml"
 var DefaultStoragePath string = cmdHelper.OSHostName + "/.local/share/barbtils/"
@@ -37,11 +37,14 @@ var (
 var RootCmd = &cobra.Command{
 	Use:   "barbtils",
 	Short: "My utils that I sorta need on a usual basis",
-	Long: `I am a little weird, and my unconventional ways require me to make things like this
-so that I can stay alive as a functional human being.
+	Long: `I am a little weird, and my unconventional ways require me to make things
+such as this so that I can stay alive as a functional human being.
 
 Use this at your own risk lol.`,
 	Run: func(cmd *cobra.Command, args []string) {
+		if len(args) == 0 {
+			cmd.Help()
+		}
 		av, err := cmd.Flags().GetBool("version")
 		if err != nil {
 			l.Logger.Fatal(err)
@@ -77,7 +80,7 @@ Use this at your own risk lol.`,
 			// line is not the one line of plain text in a JSON stream.
 			l.Logger.Debug("Logger Set to Debug")
 		}
-		initConfig()
+		InitConfig()
 	},
 }
 
@@ -119,19 +122,21 @@ func init() {
 	// Cobra supports persistent flags, which, if defined here,
 	// will be global for your application.
 
-	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", DefaultConfigPath, "config file path")
+	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", DefaultConfigPath, "config file path\n")
 	RootCmd.PersistentFlags().BoolP("debug", "d", false, "Set Log level to debug. Can be used with any command and subcommands")
-	RootCmd.PersistentFlags().BoolVarP(&jsonEnabled, "json", "j", false, "Emit machine-readable JSON: command output on stdout, logs and errors as JSON on stderr. Can be used with any command and subcommands")
+	RootCmd.PersistentFlags().BoolVarP(&jsonEnabled, "json", "j", false, "Emit machine-readable JSON: command output on stdout, \nlogs and errors as JSON on stderr.\nCan be used with any command and subcommands")
 	RootCmd.PersistentFlags().BoolP("version", "v", false, "Print app version")
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
 	// RootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 	RootCmd.PersistentFlags().Bool("get_db_uri", false, "Prints initialized DB URI to stdout")
+	RootCmd.PersistentFlags().Bool("get_db_user", false, "Prints initialized DB user to stdout")
+	RootCmd.PersistentFlags().Bool("get_db_pass", false, "Prints initialized DB pass to stdout")
 }
 
-// initConfig reads in config file and ENV variables if set.
-func initConfig() {
+// InitConfig reads in config file and ENV variables if set.
+func InitConfig() {
 	viper.AutomaticEnv() // read in environment variables that match
 	if cfgFile != DefaultConfigPath {
 		// Use config file from the flag.
@@ -160,7 +165,7 @@ func initConfig() {
 var availableFonts = []string{"3-d", "3x5", "5lineoblique", "acrobatic", "alligator", "alligator2", "alphabet", "avatar", "banner", "banner3-D", "banner3", "banner4", "barbwire", "basic", "bell", "big", "bigchief", "binary", "block", "bubble", "bulbhead", "calgphy2", "caligraphy", "catwalk", "chunky", "coinstak", "colossal", "computer", "contessa", "contrast", "cosmic", "cosmike", "cricket", "cursive", "cyberlarge", "cybermedium", "cybersmall", "diamond", "digital", "doh", "doom", "dotmatrix", "drpepper", "eftichess", "eftifont", "eftipiti", "eftirobot", "eftitalic", "eftiwall", "eftiwater", "epic", "fender", "fourtops", "fuzzy", "goofy", "gothic", "graffiti", "hollywood", "invita", "isometric1", "isometric2", "isometric3", "isometric4", "italic", "ivrit", "jazmine", "jerusalem", "katakana", "kban", "larry3d", "lcd", "lean", "letters", "linux", "lockergnome", "madrid", "marquee", "maxfour", "mike", "mini", "mirror", "mnemonic", "morse", "moscow", "nancyj-fancy", "nancyj-underlined", "nancyj", "nipples", "ntgreek", "o8", "ogre", "pawp", "peaks", "pebbles", "pepper", "poison", "puffy", "pyramid", "rectangles", "relief", "relief2", "rev", "roman", "rot13", "rounded", "rowancap", "rozzo", "runic", "runyc", "sblood", "script", "serifcap", "shadow", "short", "slant", "slide", "slscript", "small", "smisome1", "smkeyboard", "smscript", "smshadow", "smslant", "smtengwar", "speed", "stampatello", "standard", "starwars", "stellar", "stop", "straight", "tanja", "tengwar", "term", "thick", "thin", "threepoint", "ticks", "ticksslant", "tinker-toy", "tombstone", "trek", "tsalagi", "twopoint", "univers", "usaflag", "wavy", "weird"}
 
 func getDbURL() {
-	initConfig()
+	InitConfig()
 	dbURL := viper.GetString("DB_URL")
 	if dbURL == "" {
 		l.Logger.Fatal("DB_URL is not configured — set it in your barbtils.toml or environment")
