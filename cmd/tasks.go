@@ -56,8 +56,9 @@ var (
 )
 
 var tasksCmd = &cobra.Command{
-	Use:   "tasks",
-	Short: "Task timer tracker",
+	Use:     "tasks",
+	Aliases: []string{"task", "t", "ttt"},
+	Short:   "Task timer tracker",
 	Long: `Track time against named tasks. A task is referred to by its name — the
 primary handle — or by the short number shown in the listing.
 

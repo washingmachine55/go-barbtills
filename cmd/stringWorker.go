@@ -13,8 +13,9 @@ import (
 )
 
 var stringWorker = &cobra.Command{
-	Use:   "bst",
-	Short: "Bulk String Time Handler",
+	Use:     "bst",
+	Aliases: []string{"calc", "tc"},
+	Short:   "Bulk String Time Handler",
 	Long: `Handles time calculation from a bulk of string.
 Essentially takes in raw, or formatted input to calculate time as an output.`,
 	Run: func(cmd *cobra.Command, args []string) {
@@ -77,7 +78,8 @@ func processText(message string) string {
 // calculateTotalSeconds takes a string like "1d 2h + 4h 5s - 2030s"
 func calculateTotalSeconds(input string) int64 {
 	// Regular expression to find blocks like "1d", "2030s", "+", "-"
-	re := regexp.MustCompile(`([+-])|(\d+)([dhms])`)
+	// re := regexp.MustCompile(`([+-])|(\d+)([dhms])`)
+	re := regexp.MustCompile(`([+-])|(\d+)\s*([dhms])`)
 	matches := re.FindAllStringSubmatch(input, -1)
 
 	var totalSeconds int64
@@ -99,13 +101,13 @@ func calculateTotalSeconds(input string) int64 {
 
 		var seconds int64
 		switch unit {
-		case "d":
+		case "d", "day", "days":
 			seconds = val * 86400
-		case "h":
+		case "h", "hour", "hours", "hrs", "hr":
 			seconds = val * 3600
-		case "m":
+		case "m", "min", "mins", "minute", "minutes":
 			seconds = val * 60
-		case "s":
+		case "s", "second", "seconds":
 			seconds = val
 		}
 

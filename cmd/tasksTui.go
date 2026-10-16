@@ -646,7 +646,7 @@ func (m *tasksTuiModel) renderFooter() string {
 	case viewInput:
 		help = "enter submit • esc cancel"
 	default:
-		help = "↑/↓ move • s start • p pause • x complete • a archive • enter sessions • n new • e edit • A archive sessions • d delete • f filter • R refresh • q quit"
+		help = "↑/↓ move • s start • p pause • x complete • a archive • enter sessions \nn new • e edit • A archive sessions • d delete • f filter • R refresh • q quit"
 	}
 	if line == "" {
 		return tasksMuted.Render(help)

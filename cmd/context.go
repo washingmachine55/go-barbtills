@@ -14,9 +14,10 @@ import (
 
 // contextCmd represents the context command
 var ContextCmd = &cobra.Command{
-	Use:   "context",
-	Short: "Easy Context switching",
-	Long: `I know my ADHD is deliberatly messing things up, so here i am,   
+	Use:     "context",
+	Aliases: []string{"ctx"},
+	Short:   "Easy Context switching",
+	Long: `I know my ADHD is deliberatly messing things up, so here i am,
 hyperfocusing to create this command so that perhaps this...might help me
 
 I SURE HOPE IT DOES LOL
