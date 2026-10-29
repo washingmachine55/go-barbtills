@@ -8,6 +8,7 @@ import (
 	l "barbtils/internal/logger"
 	"bufio"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"os"
@@ -147,9 +148,11 @@ func readFullKvFile() {
 	scannerFile := bufio.NewScanner(f)
 
 	for scannerFile.Scan() {
-		rawLine := strings.TrimSpace(scannerFile.Text())
-
-		lines, err := encryption.Decrypt([]byte(rawLine))
+		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(scannerFile.Text()))
+		if err != nil {
+			l.Fatalf("corrupt line: %w", err)
+		}
+		lines, err := encryption.Decrypt(raw)
 		if err != nil {
 			fmt.Errorf("Could not Decrypt: %v", err)
 		}
@@ -177,9 +180,12 @@ func readKvFile(input string) {
 	scannerFile := bufio.NewScanner(f)
 
 	for scannerFile.Scan() {
-		rawLine := strings.TrimSpace(scannerFile.Text())
+		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(scannerFile.Text()))
+		if err != nil {
+			l.Fatalf("corrupt line: %w", err)
+		}
 
-		lines, err := encryption.Decrypt([]byte(rawLine))
+		lines, err := encryption.Decrypt(raw)
 		if err != nil {
 			fmt.Errorf("Could not Decrypt: %v", err)
 		}
@@ -253,7 +259,7 @@ func pairToAppend(s string) {
 		fmt.Errorf("Encryption err: %v\n", err)
 	}
 
-	_, err = scannerFile.WriteString(string(byte) + "\n")
+	_, err = scannerFile.WriteString(base64.StdEncoding.EncodeToString(byte) + "\n")
 	if err != nil {
 		fmt.Errorf("err: %v\n", err)
 	}
@@ -276,9 +282,12 @@ func scanForExistingKey(input string) error {
 	scannerFile := bufio.NewScanner(f)
 
 	for scannerFile.Scan() {
-		rawLine := strings.TrimSpace(scannerFile.Text())
+		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(scannerFile.Text()))
+		if err != nil {
+			return fmt.Errorf("corrupt line: %w", err)
+		}
 
-		lines, err := encryption.Decrypt([]byte(rawLine))
+		lines, err := encryption.Decrypt(raw)
 		if err != nil {
 			return fmt.Errorf("Could not Decrypt: %v", err)
 		}
@@ -310,9 +319,13 @@ func deleteExistingKey(input string) error {
 
 	var newLines []string
 	for scannerFile.Scan() {
-		rawLine := strings.TrimSpace(scannerFile.Text())
+		rawLine, err := base64.StdEncoding.DecodeString(strings.TrimSpace(scannerFile.Text()))
 
-		lines, err := encryption.Decrypt([]byte(rawLine))
+		if err != nil {
+			return fmt.Errorf("corrupt line: %w", err)
+		}
+
+		lines, err := encryption.Decrypt(rawLine)
 		if err != nil {
 			return fmt.Errorf("Could not Decrypt: %v", err)
 		}
@@ -320,7 +333,7 @@ func deleteExistingKey(input string) error {
 		key, _, found := strings.Cut(string(lines), ":")
 
 		if found && key != input {
-			newLines = append(newLines, rawLine)
+			newLines = append(newLines, string(rawLine))
 		}
 	}
 
@@ -339,7 +352,7 @@ func deleteExistingKey(input string) error {
 
 	writer := bufio.NewWriter(outFile)
 	for _, line := range newLines {
-		_, err := writer.WriteString(string(line) + "\n")
+		_, err := writer.WriteString(base64.StdEncoding.EncodeToString([]byte(line)) + "\n")
 		if err != nil {
 			fmt.Println("Error writing file:", err)
 			return err
