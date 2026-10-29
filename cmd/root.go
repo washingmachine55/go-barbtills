@@ -17,7 +17,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-const APP_VERSION string = "1.83.20261016"
+const APP_VERSION string = "1.84.20261030"
 
 var DefaultConfigPath string = cmdHelper.OSHostName + "/.config/barbtils/config.toml"
 var DefaultStoragePath string = cmdHelper.OSHostName + "/.local/share/barbtils/"
