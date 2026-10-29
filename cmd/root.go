@@ -131,8 +131,6 @@ func init() {
 	// when this action is called directly.
 	// RootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 	RootCmd.PersistentFlags().Bool("get_db_uri", false, "Prints initialized DB URI to stdout")
-	RootCmd.PersistentFlags().Bool("get_db_user", false, "Prints initialized DB user to stdout")
-	RootCmd.PersistentFlags().Bool("get_db_pass", false, "Prints initialized DB pass to stdout")
 }
 
 // InitConfig reads in config file and ENV variables if set.
