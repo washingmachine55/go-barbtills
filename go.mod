@@ -1,6 +1,6 @@
 module barbtils
 
-go 1.25.7
+go 1.27.3
 
 require (
 	charm.land/bubbles/v2 v2.1.1
@@ -16,6 +16,9 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/lib/pq v1.11.2
+	github.com/spf13/cobra v1.10.2
+	github.com/spf13/viper v1.21.0
+	github.com/washingmachine55/color-kwing v0.0.0-20261030213857-b424fa7123d7
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/term v0.45.0
 )
@@ -51,6 +54,7 @@ require (
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
 	github.com/golang-sql/civil v0.0.0-20220223132316-b832511892a9 // indirect
 	github.com/golang-sql/sqlexp v0.1.0 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.10.0 // indirect
@@ -75,12 +79,14 @@ require (
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
+	github.com/rs/zerolog v1.35.1 // indirect
 	github.com/sagikazarmark/locafero v0.12.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/sethvargo/go-retry v0.4.0 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
+	github.com/spf13/pflag v1.0.10 // indirect; indirectect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/tursodatabase/libsql-client-go v0.0.0-20260528064733-9d5d30a29a60 // indirect
 	github.com/vertica/vertica-sql-go v1.3.8 // indirect
@@ -108,11 +114,6 @@ require (
 	modernc.org/sqlite v1.54.0 // indirect
 )
 
-require (
-	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10 // indirect; indirectect
-	github.com/spf13/viper v1.21.0
-)
+// replace washingmachine55/color-kwing => /home/devmed/Work/personal-projects/color-kwing
 
 tool github.com/pressly/goose/v3/cmd/goose
