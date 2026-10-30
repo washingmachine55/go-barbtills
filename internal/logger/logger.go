@@ -14,7 +14,7 @@ const SepLine string = "========================================================
 
 func LoggerInit() {
 	Logger = log.NewWithOptions(os.Stderr, log.Options{
-		// ReportCaller: true,
+		ReportCaller: true,
 		// ReportTimestamp: true,
 		// TimeFormat: "[03:04:05 PM]",
 	})

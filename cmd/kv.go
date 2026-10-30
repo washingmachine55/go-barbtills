@@ -16,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -42,6 +43,7 @@ var addCmd = &cobra.Command{
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.ExactArgs(1),
 	PreRun: func(cmd *cobra.Command, args []string) {
+		encryption.GetUserOSKeyringToken()
 		kvFilePath = viper.GetString("kv.filePath")
 	},
 	Run: func(cmd *cobra.Command, args []string) {
@@ -67,6 +69,7 @@ var deleteCmd = &cobra.Command{
 	// DisableFlagsInUseLine: true,
 	Args: cobra.ExactArgs(1),
 	PreRun: func(cmd *cobra.Command, args []string) {
+		encryption.GetUserOSKeyringToken()
 		kvFilePath = viper.GetString("kv.filePath")
 	},
 	Run: func(cmd *cobra.Command, args []string) {
@@ -93,7 +96,10 @@ var getCmd = &cobra.Command{
 	DisableFlagParsing:    true,
 	DisableFlagsInUseLine: true,
 	Args:                  cobra.RangeArgs(0, 1),
+	// PersistentPreRun: func(cmd *cobra.Command, args []string) {
+	// },
 	PreRun: func(cmd *cobra.Command, args []string) {
+		encryption.GetUserOSKeyringToken()
 		kvFilePath = viper.GetString("kv.filePath")
 	},
 	Run: func(cmd *cobra.Command, args []string) {
@@ -141,7 +147,7 @@ func initKvFile() (*os.File, *bufio.Scanner) {
 func readFullKvFile() {
 	f, err := os.OpenFile(kvFilePath, os.O_RDONLY, 0644)
 	if err != nil {
-		l.Fatal(err)
+		l.Fatal("readFullKvFile: ", "err", err)
 	}
 	defer f.Close()
 
@@ -214,21 +220,34 @@ func writeKvPair(keyInput string) string {
 	done := make(chan struct{})
 
 	var valueInput string
-	scannerInput := bufio.NewScanner(os.Stdin)
-	scannerInput.Split(bufio.ScanLines)
+
 	go func() {
 		l.Printf("Enter the value for the key of %s: ", keyInput)
-
-		for scannerInput.Scan() {
-			valueInput = scannerInput.Text()
-			close(done)
+		byteToken, err := term.ReadPassword(uintptr(syscall.Stdin))
+		if err != nil {
+			l.Fatal(err)
 		}
+		fmt.Println() // Print newline after hidden input
 
-		if err := scannerInput.Err(); err != nil {
-			l.Errorf("Error reading input: %v", err)
-		}
+		valueInput = string(byteToken)
+		close(done)
 	}()
 
+	// 	scannerInput := bufio.NewScanner(os.Stdin)
+	// 	scannerInput.Split(bufio.ScanLines)
+	// 	go func() {
+	// 		l.Printf("Enter the value for the key of %s: ", keyInput)
+	//
+	// 		for scannerInput.Scan() {
+	// 			valueInput = scannerInput.Text()
+	// 			close(done)
+	// 		}
+	//
+	// 		if err := scannerInput.Err(); err != nil {
+	// 			l.Errorf("Error reading input: %v", err)
+	// 		}
+	// 	}()
+	//
 	select {
 	case <-ctx.Done():
 		fmt.Println("\nReceived shutdown signal, exiting...")
